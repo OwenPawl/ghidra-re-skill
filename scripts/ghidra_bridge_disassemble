@@ -7,16 +7,21 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_disassemble <start> [end]
+Usage: ghidra_bridge_disassemble <start> [end] [key=value ...]
 EOF
 }
 
-[[ $# -ge 1 && $# -le 2 ]] || {
+[[ $# -ge 1 ]] || {
   usage >&2
   exit 1
 }
 
 start="$1"
-end="${2:-$1}"
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true start="$start" end="$end")"
+shift
+end="$start"
+if [[ $# -gt 0 && "$1" != *=* ]]; then
+  end="$1"
+  shift
+fi
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true start="$start" end="$end" "$@")"
 "$SCRIPT_DIR/ghidra_bridge_call" /listing/disassemble "$body"

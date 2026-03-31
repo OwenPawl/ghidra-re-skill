@@ -5,19 +5,45 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-ghidra_re_bridge_prune_stale_session
+requested_session=""
+requested_project=""
+requested_program=""
 
-if [[ ! -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]]; then
-  rm -f "$GHIDRA_RE_BRIDGE_CONTROL_FILE"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    session=*)
+      requested_session="${1#session=}"
+      ;;
+    project=*)
+      requested_project="${1#project=}"
+      ;;
+    program=*)
+      requested_program="${1#program=}"
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $1"
+      ;;
+  esac
+  shift
+done
+
+ghidra_re_bridge_prune_stale_sessions
+
+session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program" 2>/dev/null || true)"
+if [[ -z "$session_file" ]]; then
   printf 'Bridge already disarmed\n'
   exit 0
 fi
 
-ghidra_re_bridge_write_control_file disarm "" ""
+session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id)"
+project_name="$(ghidra_re_bridge_read_value_from_file "$session_file" project_name)"
+program_name="$(ghidra_re_bridge_read_value_from_file "$session_file" program_name)"
+ghidra_re_bridge_write_request_file disarm "$session_id" "$project_name" "$program_name" >/dev/null
 
-if ! ghidra_re_bridge_wait_for_disarm 15; then
-  if ! ghidra_re_bridge_session_healthy; then
-    ghidra_re_bridge_clear_state_files
+if ! ghidra_re_bridge_wait_for_disarm 15 "$session_id" "$project_name" "$program_name"; then
+  if ! ghidra_re_bridge_session_healthy_file "$session_file"; then
+    rm -f "$session_file"
+    ghidra_re_bridge_prune_stale_sessions
     printf 'Bridge disarmed (cleared stale session state)\n'
     exit 0
   fi

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_mission_status <mission_name>
+EOF
+}
+
+[[ $# -eq 1 ]] || {
+  usage >&2
+  exit 1
+}
+
+mission_dir="$(ghidra_re_investigation_dir "$1")"
+[[ -d "$mission_dir" ]] || ghidra_re_die "mission not found: $1"
+
+python3 "$(ghidra_re_mission_backend)" status --mission-dir "$mission_dir"

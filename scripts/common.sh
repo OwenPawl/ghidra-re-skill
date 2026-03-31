@@ -22,14 +22,20 @@ GHIDRA_WORKSPACE="${GHIDRA_WORKSPACE:-$HOME/ghidra-projects}"
 GHIDRA_PROJECTS_DIR="${GHIDRA_PROJECTS_DIR:-$GHIDRA_WORKSPACE/projects}"
 GHIDRA_EXPORTS_DIR="${GHIDRA_EXPORTS_DIR:-$GHIDRA_WORKSPACE/exports}"
 GHIDRA_LOGS_DIR="${GHIDRA_LOGS_DIR:-$GHIDRA_WORKSPACE/logs}"
+GHIDRA_INVESTIGATIONS_DIR="${GHIDRA_INVESTIGATIONS_DIR:-$GHIDRA_WORKSPACE/investigations}"
 GHIDRA_CUSTOM_SCRIPTS_DIR="${GHIDRA_CUSTOM_SCRIPTS_DIR:-$GHIDRA_RE_ROOT/scripts/ghidra_scripts}"
 GHIDRA_TEMPLATES_DIR="${GHIDRA_TEMPLATES_DIR:-$GHIDRA_RE_ROOT/templates}"
 GHIDRA_RE_BUG_HUNT_MANIFEST="${GHIDRA_RE_BUG_HUNT_MANIFEST:-$GHIDRA_RE_ROOT/references/bug-hunt-patterns.json}"
 GHIDRA_RE_BRIDGE_EXTENSION_DIR="${GHIDRA_RE_BRIDGE_EXTENSION_DIR:-$GHIDRA_RE_ROOT/bridge-extension/CodexGhidraBridge}"
 GHIDRA_RE_BRIDGE_DIST_DIR="${GHIDRA_RE_BRIDGE_DIST_DIR:-$GHIDRA_RE_BRIDGE_EXTENSION_DIR/dist}"
 GHIDRA_RE_BRIDGE_CONFIG_DIR="${GHIDRA_RE_BRIDGE_CONFIG_DIR:-$HOME/.config/ghidra-re}"
-GHIDRA_RE_BRIDGE_SESSION_FILE="${GHIDRA_RE_BRIDGE_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-session.json}"
-GHIDRA_RE_BRIDGE_CONTROL_FILE="${GHIDRA_RE_BRIDGE_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-control.json}"
+GHIDRA_RE_BRIDGE_SESSIONS_DIR="${GHIDRA_RE_BRIDGE_SESSIONS_DIR:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-sessions}"
+GHIDRA_RE_BRIDGE_REQUESTS_DIR="${GHIDRA_RE_BRIDGE_REQUESTS_DIR:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-requests}"
+GHIDRA_RE_BRIDGE_CURRENT_FILE="${GHIDRA_RE_BRIDGE_CURRENT_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.json}"
+GHIDRA_RE_BRIDGE_LEGACY_SESSION_FILE="${GHIDRA_RE_BRIDGE_LEGACY_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-session.json}"
+GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE="${GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-control.json}"
+GHIDRA_RE_BRIDGE_SESSION_FILE="${GHIDRA_RE_BRIDGE_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CURRENT_FILE}"
+GHIDRA_RE_BRIDGE_CONTROL_FILE="${GHIDRA_RE_BRIDGE_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE}"
 
 GHIDRA_DEFAULT_SCRIPT_DIRS=(
   "$GHIDRA_CUSTOM_SCRIPTS_DIR"
@@ -122,7 +128,7 @@ ghidra_re_detect_jdk_dir() {
 }
 
 ghidra_re_ensure_workspace() {
-  mkdir -p "$GHIDRA_PROJECTS_DIR" "$GHIDRA_EXPORTS_DIR" "$GHIDRA_LOGS_DIR"
+  mkdir -p "$GHIDRA_PROJECTS_DIR" "$GHIDRA_EXPORTS_DIR" "$GHIDRA_LOGS_DIR" "$GHIDRA_INVESTIGATIONS_DIR"
 }
 
 ghidra_re_timestamp() {
@@ -166,6 +172,18 @@ ghidra_re_dossiers_dir() {
 
 ghidra_re_findings_dir() {
   printf '%s/%s/%s/findings' "$GHIDRA_EXPORTS_DIR" "$1" "$2"
+}
+
+ghidra_re_investigation_dir() {
+  printf '%s/%s' "$GHIDRA_INVESTIGATIONS_DIR" "$(ghidra_re_sanitize_name "$1")"
+}
+
+ghidra_re_mission_backend() {
+  printf '%s/scripts/ghidra_mission_backend.py' "$GHIDRA_RE_ROOT"
+}
+
+ghidra_re_target_key() {
+  printf '%s:%s' "$1" "$2"
 }
 
 ghidra_re_program_name_from_binary() {
@@ -309,93 +327,43 @@ ghidra_re_bridge_dist_zip() {
   printf '%s' "$latest"
 }
 
-ghidra_re_bridge_require_session() {
-  [[ -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] || ghidra_re_die "bridge session not found at $GHIDRA_RE_BRIDGE_SESSION_FILE"
+ghidra_re_bridge_ensure_dirs() {
+  mkdir -p "$GHIDRA_RE_BRIDGE_CONFIG_DIR" "$GHIDRA_RE_BRIDGE_SESSIONS_DIR" "$GHIDRA_RE_BRIDGE_REQUESTS_DIR"
 }
 
-ghidra_re_bridge_read_session_value() {
-  local key="$1"
-  ghidra_re_bridge_require_session
-  /usr/bin/plutil -extract "$key" raw -o - "$GHIDRA_RE_BRIDGE_SESSION_FILE" 2>/dev/null || true
+ghidra_re_bridge_session_files() {
+  ghidra_re_bridge_ensure_dirs
+  find "$GHIDRA_RE_BRIDGE_SESSIONS_DIR" -maxdepth 1 -type f -name '*.json' | sort
 }
 
-ghidra_re_bridge_wait_for_session() {
-  local timeout_seconds="${1:-30}"
-  local require_program="${2:-0}"
-  local expected_program="${3:-}"
-  local started
-  started="$(date +%s)"
-  while true; do
-    if ghidra_re_bridge_session_healthy; then
-      if [[ "$require_program" != "1" ]]; then
-        return 0
-      fi
-      local program_path=""
-      program_path="$(ghidra_re_bridge_read_session_value program_path)"
-      if [[ -n "$program_path" ]]; then
-        if [[ -z "$expected_program" || "$program_path" == "$expected_program" || "$program_path" == */"$expected_program" ]]; then
-          return 0
-        fi
-      fi
-    fi
-    if (( "$(date +%s)" - started >= timeout_seconds )); then
-      return 1
-    fi
-    sleep 1
-  done
+ghidra_re_bridge_read_value_from_file() {
+  local path="$1"
+  local key="$2"
+  [[ -f "$path" ]] || return 1
+  /usr/bin/plutil -extract "$key" raw -o - "$path" 2>/dev/null || true
 }
 
-ghidra_re_bridge_wait_for_disarm() {
-  local timeout_seconds="${1:-15}"
-  local started
-  started="$(date +%s)"
-  while true; do
-    [[ ! -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] && return 0
-    if (( "$(date +%s)" - started >= timeout_seconds )); then
-      return 1
-    fi
-    sleep 1
-  done
-}
-
-ghidra_re_ghidra_running() {
-  pgrep -f 'ghidra\.GhidraRun|/Applications/Ghidra/ghidraRun|/Applications/Ghidra/support/launch\.sh' >/dev/null 2>&1
-}
-
-ghidra_re_bridge_clear_state_files() {
-  rm -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" "$GHIDRA_RE_BRIDGE_CONTROL_FILE"
-}
-
-ghidra_re_bridge_session_pid_alive() {
+ghidra_re_bridge_session_pid_alive_file() {
+  local session_file="$1"
   local pid=""
-  [[ -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] || return 1
-  pid="$(ghidra_re_bridge_read_session_value pid)"
+  [[ -f "$session_file" ]] || return 1
+  pid="$(ghidra_re_bridge_read_value_from_file "$session_file" pid)"
   [[ -n "$pid" ]] || return 1
   kill -0 "$pid" >/dev/null 2>&1
 }
 
-ghidra_re_bridge_prune_stale_session() {
-  [[ -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] || return 0
-  if ghidra_re_bridge_session_pid_alive; then
-    return 0
-  fi
-  rm -f "$GHIDRA_RE_BRIDGE_SESSION_FILE"
-}
-
-ghidra_re_bridge_session_healthy() {
-  ghidra_re_bridge_prune_stale_session
-  if [[ ! -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]]; then
-    return 1
-  fi
+ghidra_re_bridge_session_healthy_file() {
+  local session_file="$1"
   local url=""
   local token=""
   local response=""
   local ok=""
-  if ! ghidra_re_bridge_session_pid_alive; then
+  [[ -f "$session_file" ]] || return 1
+  if ! ghidra_re_bridge_session_pid_alive_file "$session_file"; then
     return 1
   fi
-  url="$(ghidra_re_bridge_read_session_value bridge_url)"
-  token="$(ghidra_re_bridge_read_session_value token)"
+  url="$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
+  token="$(ghidra_re_bridge_read_value_from_file "$session_file" token)"
   [[ -n "$url" && -n "$token" ]] || return 1
   response="$(curl -fsS --max-time 2 \
     -X POST \
@@ -411,29 +379,248 @@ STDOUT.write(payload.is_a?(Hash) && payload["ok"] ? "true" : "false")
   [[ "$ok" == "true" ]]
 }
 
-ghidra_re_bridge_require_healthy_session() {
-  ghidra_re_bridge_prune_stale_session
+ghidra_re_bridge_remove_current_if_matches() {
+  local session_file="$1"
+  local current_file=""
+  current_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
+  if [[ -n "$current_file" && "$current_file" == "$session_file" ]]; then
+    rm -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE"
+  fi
+}
+
+ghidra_re_bridge_prune_stale_sessions() {
+  local session_file=""
+  ghidra_re_bridge_ensure_dirs
+  while IFS= read -r session_file; do
+    [[ -z "$session_file" ]] && continue
+    if ! ghidra_re_bridge_session_healthy_file "$session_file"; then
+      ghidra_re_bridge_remove_current_if_matches "$session_file"
+      rm -f "$session_file"
+    fi
+  done < <(ghidra_re_bridge_session_files)
+  if [[ -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE" ]]; then
+    local current_session_file=""
+    current_session_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
+    if [[ -z "$current_session_file" || ! -f "$current_session_file" ]]; then
+      rm -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE"
+    fi
+  fi
+}
+
+ghidra_re_bridge_latest_session_file() {
+  ghidra_re_bridge_prune_stale_sessions
+  find "$GHIDRA_RE_BRIDGE_SESSIONS_DIR" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | \
+    xargs -0 ls -1t 2>/dev/null | head -n 1
+}
+
+ghidra_re_bridge_write_current_from_session_file() {
+  local session_file="$1"
+  local tmp_file=""
+  local session_id=""
+  [[ -f "$session_file" ]] || ghidra_re_die "session file not found: $session_file"
+  ghidra_re_bridge_ensure_dirs
+  session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id)"
+  [[ -n "$session_id" ]] || ghidra_re_die "session file is missing session_id: $session_file"
+  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.XXXXXX.tmp")"
+  /usr/bin/ruby -rjson -rtime -e '
+payload = {
+  "version" => 1,
+  "session_id" => ARGV[0],
+  "session_file" => ARGV[1],
+  "selected_at" => Time.now.utc.iso8601
+}
+STDOUT.write(JSON.pretty_generate(payload))
+' "$session_id" "$session_file" >"$tmp_file"
+  mv "$tmp_file" "$GHIDRA_RE_BRIDGE_CURRENT_FILE"
+}
+
+ghidra_re_bridge_current_session_file() {
+  ghidra_re_bridge_prune_stale_sessions
+  if [[ -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE" ]]; then
+    local current_session_file=""
+    current_session_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
+    if [[ -n "$current_session_file" && -f "$current_session_file" ]]; then
+      printf '%s\n' "$current_session_file"
+      return 0
+    fi
+  fi
+  local latest=""
+  latest="$(ghidra_re_bridge_latest_session_file || true)"
+  if [[ -n "$latest" && -f "$latest" ]]; then
+    ghidra_re_bridge_write_current_from_session_file "$latest"
+    printf '%s\n' "$latest"
+    return 0
+  fi
+  return 1
+}
+
+ghidra_re_bridge_require_session() {
+  local session_file=""
+  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  [[ -n "$session_file" && -f "$session_file" ]] || ghidra_re_die "bridge session not found; arm or select a bridge session first"
+}
+
+ghidra_re_bridge_read_session_value() {
+  local key="$1"
+  local session_file=""
   ghidra_re_bridge_require_session
-  ghidra_re_bridge_session_healthy || \
-    ghidra_re_die "bridge session at $GHIDRA_RE_BRIDGE_SESSION_FILE is stale or unreachable; arm the bridge again"
+  session_file="$(ghidra_re_bridge_current_session_file)"
+  ghidra_re_bridge_read_value_from_file "$session_file" "$key"
+}
+
+ghidra_re_bridge_current_session_id() {
+  ghidra_re_bridge_read_session_value session_id
+}
+
+ghidra_re_bridge_session_matches_file() {
+  local session_file="$1"
+  local requested_session="${2:-}"
+  local requested_project="${3:-}"
+  local requested_program="${4:-}"
+  local session_id=""
+  local project_name=""
+  local project_path=""
+  local program_name=""
+  local program_path=""
+  [[ -f "$session_file" ]] || return 1
+  if [[ -n "$requested_session" ]]; then
+    session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id)"
+    [[ -n "$session_id" ]] || return 1
+    [[ "$session_id" == "$requested_session" || "$session_id" == "$requested_session"* ]] || return 1
+  fi
+  if [[ -n "$requested_project" ]]; then
+    project_name="$(ghidra_re_bridge_read_value_from_file "$session_file" project_name)"
+    project_path="$(ghidra_re_bridge_read_value_from_file "$session_file" project_path)"
+    [[ "$project_name" == "$requested_project" || "$project_path" == "$(ghidra_re_project_file "$requested_project")" || "$project_path" == */"$requested_project.gpr" ]] || return 1
+  fi
+  if [[ -n "$requested_program" ]]; then
+    program_name="$(ghidra_re_bridge_read_value_from_file "$session_file" program_name)"
+    program_path="$(ghidra_re_bridge_read_value_from_file "$session_file" program_path)"
+    [[ "$program_name" == "$requested_program" || "$program_path" == "$requested_program" || "$program_path" == */"$requested_program" ]] || return 1
+  fi
+  return 0
+}
+
+ghidra_re_bridge_find_matching_sessions() {
+  local requested_session="${1:-}"
+  local requested_project="${2:-}"
+  local requested_program="${3:-}"
+  local session_file=""
+  ghidra_re_bridge_prune_stale_sessions
+  while IFS= read -r session_file; do
+    [[ -z "$session_file" ]] && continue
+    if ghidra_re_bridge_session_matches_file "$session_file" "$requested_session" "$requested_project" "$requested_program"; then
+      printf '%s\n' "$session_file"
+    fi
+  done < <(ghidra_re_bridge_session_files)
+}
+
+ghidra_re_bridge_resolve_session_file() {
+  local requested_session="${1:-}"
+  local requested_project="${2:-}"
+  local requested_program="${3:-}"
+  local current_file=""
+  local matches=()
+  local match=""
+  if [[ -z "$requested_session" && -z "$requested_project" && -z "$requested_program" ]]; then
+    ghidra_re_bridge_current_session_file
+    return 0
+  fi
+  while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    matches+=("$match")
+  done < <(ghidra_re_bridge_find_matching_sessions "$requested_session" "$requested_project" "$requested_program")
+  if [[ ${#matches[@]} -eq 0 ]]; then
+    return 1
+  fi
+  if [[ ${#matches[@]} -eq 1 ]]; then
+    printf '%s\n' "${matches[0]}"
+    return 0
+  fi
+  current_file="$(ghidra_re_bridge_current_session_file || true)"
+  if [[ -n "$current_file" ]]; then
+    for match in "${matches[@]}"; do
+      if [[ "$match" == "$current_file" ]]; then
+        printf '%s\n' "$match"
+        return 0
+      fi
+    done
+  fi
+  ghidra_re_die "multiple matching bridge sessions found; use session=<id> to disambiguate"
+}
+
+ghidra_re_bridge_require_healthy_session() {
+  local session_file=""
+  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  [[ -n "$session_file" ]] || ghidra_re_die "bridge session not found; arm or select a bridge session first"
+  ghidra_re_bridge_session_healthy_file "$session_file" || \
+    ghidra_re_die "bridge session at $session_file is stale or unreachable; arm the bridge again"
 }
 
 ghidra_re_bridge_session_matches_program() {
   local requested_program="${1:-}"
-  local program_path=""
-  [[ -z "$requested_program" ]] && return 0
-  program_path="$(ghidra_re_bridge_read_session_value program_path)"
-  [[ -n "$program_path" ]] || return 1
-  [[ "$program_path" == "$requested_program" || "$program_path" == */"$requested_program" ]]
+  local session_file=""
+  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  [[ -n "$session_file" ]] || return 1
+  ghidra_re_bridge_session_matches_file "$session_file" "" "" "$requested_program"
 }
 
 ghidra_re_bridge_session_matches_project() {
   local requested_project="${1:-}"
-  local project_path=""
-  [[ -z "$requested_project" ]] && return 0
-  project_path="$(ghidra_re_bridge_read_session_value project_path)"
-  [[ -n "$project_path" ]] || return 1
-  [[ "$project_path" == "$(ghidra_re_project_file "$requested_project")" || "$project_path" == */"$requested_project.gpr" ]]
+  local session_file=""
+  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  [[ -n "$session_file" ]] || return 1
+  ghidra_re_bridge_session_matches_file "$session_file" "" "$requested_project" ""
+}
+
+ghidra_re_bridge_wait_for_session() {
+  local timeout_seconds="${1:-30}"
+  local expected_project="${2:-}"
+  local expected_program="${3:-}"
+  local started=""
+  local session_file=""
+  started="$(date +%s)"
+  while true; do
+    session_file="$(ghidra_re_bridge_resolve_session_file "" "$expected_project" "$expected_program" 2>/dev/null || true)"
+    if [[ -n "$session_file" ]] && ghidra_re_bridge_session_healthy_file "$session_file"; then
+      printf '%s\n' "$session_file"
+      return 0
+    fi
+    if (( "$(date +%s)" - started >= timeout_seconds )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+ghidra_re_bridge_wait_for_disarm() {
+  local timeout_seconds="${1:-15}"
+  local requested_session="${2:-}"
+  local requested_project="${3:-}"
+  local requested_program="${4:-}"
+  local started=""
+  started="$(date +%s)"
+  while true; do
+    ghidra_re_bridge_prune_stale_sessions
+    if ! ghidra_re_bridge_find_matching_sessions "$requested_session" "$requested_project" "$requested_program" | grep -q .; then
+      return 0
+    fi
+    if (( "$(date +%s)" - started >= timeout_seconds )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+ghidra_re_ghidra_running() {
+  pgrep -f 'java.*ghidra\.GhidraRun' >/dev/null 2>&1
+}
+
+ghidra_re_bridge_clear_state_files() {
+  rm -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE" "$GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE" "$GHIDRA_RE_BRIDGE_LEGACY_SESSION_FILE"
+  if [[ -d "$GHIDRA_RE_BRIDGE_REQUESTS_DIR" ]]; then
+    find "$GHIDRA_RE_BRIDGE_REQUESTS_DIR" -maxdepth 1 -type f -name '*.json' -delete
+  fi
 }
 
 ghidra_re_gui_app_path() {
@@ -507,23 +694,58 @@ ghidra_re_launch_gui_project() {
   nohup "$GHIDRA_INSTALL_DIR/ghidraRun" "$project_file" </dev/null >/dev/null 2>&1 &
 }
 
-ghidra_re_bridge_write_control_file() {
+ghidra_re_bridge_write_request_file() {
   local command="$1"
-  local project_name="${2:-}"
-  local program_name="${3:-}"
+  local requested_session="${2:-}"
+  local project_name="${3:-}"
+  local program_name="${4:-}"
+  local request_id=""
   local tmp_file=""
-  mkdir -p "$GHIDRA_RE_BRIDGE_CONFIG_DIR"
-  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-control.XXXXXX.tmp")"
+  local request_file=""
+  ghidra_re_bridge_ensure_dirs
+  request_id="$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+  if [[ -z "$request_id" ]]; then
+    request_id="request-$(date +%s)-$RANDOM"
+  fi
+  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_REQUESTS_DIR/request.XXXXXX.tmp")"
+  request_file="$GHIDRA_RE_BRIDGE_REQUESTS_DIR/${request_id}.json"
   /usr/bin/ruby -rjson -rtime -e '
 payload = {
-  "command" => ARGV[0],
-  "project_name" => ARGV[1],
-  "program_name" => ARGV[2],
+  "version" => 1,
+  "request_id" => ARGV[0],
+  "command" => ARGV[1],
+  "session_id" => ARGV[2],
+  "project_name" => ARGV[3],
+  "program_name" => ARGV[4],
   "requested_at" => Time.now.utc.iso8601
 }
 STDOUT.write(JSON.pretty_generate(payload))
-' "$command" "$project_name" "$program_name" >"$tmp_file"
-  mv "$tmp_file" "$GHIDRA_RE_BRIDGE_CONTROL_FILE"
+' "$request_id" "$command" "$requested_session" "$project_name" "$program_name" >"$tmp_file"
+  mv "$tmp_file" "$request_file"
+  printf '%s\n' "$request_file"
+}
+
+ghidra_re_bridge_select_session() {
+  local requested_session="${1:-}"
+  local requested_project="${2:-}"
+  local requested_program="${3:-}"
+  local session_file=""
+  session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program")" || return 1
+  ghidra_re_bridge_write_current_from_session_file "$session_file"
+  printf '%s\n' "$session_file"
+}
+
+ghidra_re_bridge_extract_selectors_from_json() {
+  local body="${1:-{}}"
+  printf '%s' "$body" | /usr/bin/ruby -rjson -e '
+payload = JSON.parse(STDIN.read) rescue {}
+selectors = [
+  payload["session"] || payload["session_id"] || "",
+  payload["project"] || payload["project_name"] || "",
+  payload["program"] || payload["program_name"] || ""
+]
+STDOUT.write(selectors.join("\t"))
+'
 }
 
 ghidra_re_bridge_json_from_kv() {

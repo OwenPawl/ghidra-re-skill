@@ -7,14 +7,17 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_patch_bytes <address> <hex_bytes>
+Usage: ghidra_bridge_patch_bytes <address> <hex_bytes> [key=value ...]
 EOF
 }
 
-[[ $# -eq 2 ]] || {
+[[ $# -ge 2 ]] || {
   usage >&2
   exit 1
 }
 
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$1" bytes="$2")"
+address="$1"
+hex_bytes="$2"
+shift 2
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$address" bytes="$hex_bytes" "$@")"
 "$SCRIPT_DIR/ghidra_bridge_call" /patch/bytes "$body"

@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_mission_trace <mission_name> seed=<kind:value> [target=<project:program>] [limit_targets=<n>] [trace_limit=<n>]
+EOF
+}
+
+[[ $# -ge 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+mission_name="$1"
+shift
+
+seed=""
+trace_limit=5
+limit_targets=3
+target_filters=()
+
+for arg in "$@"; do
+  case "$arg" in
+    seed=*)
+      seed="${arg#seed=}"
+      ;;
+    target=*)
+      target_filters+=("${arg#target=}")
+      ;;
+    trace_limit=*)
+      trace_limit="${arg#trace_limit=}"
+      ;;
+    limit_targets=*)
+      limit_targets="${arg#limit_targets=}"
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+[[ -n "$seed" ]] || ghidra_re_die "seed=<kind:value> is required"
+[[ "$seed" == *:* ]] || ghidra_re_die "seed must look like kind:value"
+
+seed_kind="${seed%%:*}"
+seed_value="${seed#*:}"
+mission_dir="$(ghidra_re_investigation_dir "$mission_name")"
+[[ -d "$mission_dir" ]] || ghidra_re_die "mission not found: $mission_name"
+
+backend="$(ghidra_re_mission_backend)"
+query_file="$(mktemp "$mission_dir/exports/query.XXXXXX")"
+status_file="$(mktemp "$mission_dir/exports/status.XXXXXX")"
+
+python3 "$backend" query-seed \
+  --mission-dir "$mission_dir" \
+  --seed-kind "$seed_kind" \
+  --seed-value "$seed_value" >"$query_file"
+
+python3 "$backend" status --mission-dir "$mission_dir" >"$status_file"
+
+targets_file="$(mktemp "$mission_dir/exports/targets.XXXXXX")"
+python_args=("$query_file" "$status_file" "$seed_kind" "$limit_targets")
+if [[ ${#target_filters[@]} -gt 0 ]]; then
+  python_args+=("${target_filters[@]}")
+fi
+python3 - "${python_args[@]}" >"$targets_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+query = json.loads(Path(sys.argv[1]).read_text())
+status = json.loads(Path(sys.argv[2]).read_text())
+seed_kind = sys.argv[3].lower()
+limit_targets = int(sys.argv[4])
+filters = sys.argv[5:]
+
+targets = status.get("targets_visited", [])
+targets_by_key = {item["target_key"]: item for item in targets}
+
+selected = []
+if filters:
+    filter_set = set(filters)
+    for item in targets:
+        ref = f'{item.get("project_name","")}:{item.get("program_name","")}'
+        if item["target_key"] in filter_set or ref in filter_set:
+            selected.append(item)
+else:
+    for candidate in query.get("target_candidates", []):
+        item = targets_by_key.get(candidate.get("target_key", ""))
+        if item:
+            selected.append(item)
+    if not selected:
+        if seed_kind == "selector":
+            for item in targets:
+                selected.append(item)
+        else:
+            selected = targets[:]
+
+deduped = []
+seen = set()
+for item in selected:
+    key = item["target_key"]
+    if key in seen:
+        continue
+    seen.add(key)
+    deduped.append(item)
+
+for item in deduped[:limit_targets]:
+    print(f'{item.get("project_name","")}\t{item.get("program_name","")}\t{item.get("target_key","")}')
+PY
+
+slug_seed="$(ghidra_re_sanitize_name "${seed_kind}_${seed_value}")"
+trace_root="$mission_dir/exports/traces/$slug_seed"
+mkdir -p "$trace_root"
+cp "$query_file" "$trace_root/query.json"
+cp "$status_file" "$trace_root/status-before.json"
+
+target_index=0
+while IFS=$'\t' read -r project_name program_name target_key; do
+  [[ -n "$project_name" && -n "$program_name" && -n "$target_key" ]] || continue
+  target_dir="$trace_root/${project_name}__${program_name}"
+  mkdir -p "$target_dir"
+
+  "$SCRIPT_DIR/ghidra_bridge_open" "$project_name" "$program_name" >/dev/null
+  session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" || true)"
+  [[ -n "$session_file" ]] || ghidra_re_die "failed to locate live session for $target_key"
+  python3 "$backend" register-session --mission-dir "$mission_dir" --session-file "$session_file" >/dev/null
+
+  navigate_flag=false
+  if [[ $target_index -eq 0 ]]; then
+    navigate_flag=true
+  fi
+
+  if [[ "$seed_kind" == "selector" ]]; then
+    trace_file="$target_dir/selector-trace.json"
+    "$SCRIPT_DIR/ghidra_bridge_selector_trace" "$seed_value" \
+      "project=$project_name" \
+      "program=$program_name" \
+      "limit=$trace_limit" >"$trace_file"
+
+    analysis_entry="$(python3 - "$trace_file" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+result = payload.get("result", payload)
+items = result.get("implementations", [])
+if not items:
+    items = result.get("sender_functions", [])
+entry = items[0].get("entry", "") if items else ""
+print(entry)
+PY
+)"
+    analysis_file=""
+    if [[ -n "$analysis_entry" ]]; then
+      analysis_file="$target_dir/analyze-target.json"
+      "$SCRIPT_DIR/ghidra_bridge_analyze_target" \
+        "address=$analysis_entry" \
+        "project=$project_name" \
+        "program=$program_name" \
+        "navigate=$navigate_flag" >"$analysis_file"
+    fi
+
+    ingest_args=(
+      "$backend" ingest-selector-trace
+      --mission-dir "$mission_dir"
+      --target-key "$target_key"
+      --selector "$seed_value"
+      --trace-file "$trace_file"
+    )
+    if [[ -n "$analysis_file" ]]; then
+      ingest_args+=(--analysis-file "$analysis_file")
+    fi
+    python3 "${ingest_args[@]}" >/dev/null
+  else
+    analysis_file="$target_dir/analyze-target.json"
+    "$SCRIPT_DIR/ghidra_bridge_analyze_target" \
+      "query=$seed_value" \
+      "project=$project_name" \
+      "program=$program_name" \
+      "limit=$trace_limit" \
+      "navigate=$navigate_flag" >"$analysis_file" || true
+    if [[ -f "$analysis_file" && -s "$analysis_file" ]]; then
+      python3 "$backend" ingest-analyze-target \
+        --mission-dir "$mission_dir" \
+        --target-key "$target_key" \
+        --seed-kind "$seed_kind" \
+        --seed-value "$seed_value" \
+        --analysis-file "$analysis_file" >/dev/null
+    fi
+  fi
+  target_index=$((target_index + 1))
+done <"$targets_file"
+
+python3 "$backend" render-report --mission-dir "$mission_dir" >/dev/null
+printf 'Mission trace complete: %s\n' "$seed"
+printf 'Report: %s\n' "$mission_dir/reports/latest.md"

@@ -1,13 +1,14 @@
 # ghidra-re
 
-`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, bug-hunting triage, and a live Ghidra bridge for iterative RE sessions.
+`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
 
 ## What it includes
 
 - Headless import and analysis helpers
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
-- Bug-hunt bundle generation for entrypoint-to-sink triage
-- Function dossiers and project write-back helpers
+- A multi-session live Ghidra bridge registry for several open targets at once
+- Mission workspaces with a persistent SQLite investigation graph, notes, and reports
+- Function dossiers, write-back helpers, and optional bug-hunt overlays
 - A live Ghidra bridge extension for navigation, decompilation, comments, renames, and controlled program surgery
 - Share-package builders for handing the skill to another Mac
 
@@ -74,22 +75,44 @@ The default local assumptions are:
 
 ```bash
 ./scripts/bootstrap
-./scripts/ghidra_import_analyze /path/to/binary my_project
-./scripts/ghidra_export_apple_bundle my_project BinaryName
-./scripts/ghidra_export_bug_hunt_bundle my_project BinaryName
-./scripts/ghidra_open_gui my_project BinaryName
-./scripts/ghidra_bridge_arm my_project BinaryName
+./scripts/ghidra_mission_start my_mission \
+  goal='Trace a subsystem across related targets' \
+  target=/absolute/path/to/binary \
+  target=existing_project:FrameworkName
+./scripts/ghidra_mission_trace my_mission seed=selector:initWithCoder:
+./scripts/ghidra_mission_report my_mission
 ```
 
-Once the bridge is armed, the fastest interactive loop is usually:
+For a focused single-target session, the fastest interactive loop is usually:
 
 ```bash
+./scripts/ghidra_import_analyze /path/to/binary my_project
+./scripts/ghidra_export_apple_bundle my_project BinaryName
+./scripts/ghidra_bridge_open my_project BinaryName
 ./scripts/ghidra_bridge_functions_search 'SomeFunctionName'
 ./scripts/ghidra_bridge_analyze_target 'SomeFunctionName'
 ./scripts/ghidra_bridge_selector_trace 'someSelector:'
 ```
 
+For a live multi-target session, start with the registry:
+
+```bash
+./scripts/ghidra_bridge_sessions
+./scripts/ghidra_bridge_select project=workflowkit_bug_smoke
+```
+
+Prefer `project=` or `session=` when two live targets share the same program name.
+
+The optional bug-hunt layer is still there when you want it:
+
+```bash
+./scripts/ghidra_export_bug_hunt_bundle my_project BinaryName
+./scripts/ghidra_function_dossier my_project BinaryName 100012340
+```
+
 ## Notes
 
 - Real workflow friction and wishlist items are tracked in [use-case-driven-notes.md](./references/use-case-driven-notes.md).
-- The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass.
+- Mission workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
+- The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.
+- The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass, and now supports selecting among multiple live targets.

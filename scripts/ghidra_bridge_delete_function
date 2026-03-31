@@ -7,14 +7,16 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_delete_function <function_or_address>
+Usage: ghidra_bridge_delete_function <function_or_address> [key=value ...]
 EOF
 }
 
-[[ $# -eq 1 ]] || {
+[[ $# -ge 1 ]] || {
   usage >&2
   exit 1
 }
 
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true function="$1")"
+function_or_address="$1"
+shift
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true function="$function_or_address" "$@")"
 "$SCRIPT_DIR/ghidra_bridge_call" /function/delete "$body"

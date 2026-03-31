@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_bridge_select session=<id>
+   or: ghidra_bridge_select project=<project_name> [program=<program_name>]
+   or: ghidra_bridge_select program=<program_name>
+EOF
+}
+
+[[ $# -ge 1 ]] || {
+  usage >&2
+  exit 1
+}
+
+requested_session=""
+requested_project=""
+requested_program=""
+
+for arg in "$@"; do
+  case "$arg" in
+    session=*)
+      requested_session="${arg#session=}"
+      ;;
+    project=*)
+      requested_project="${arg#project=}"
+      ;;
+    program=*)
+      requested_program="${arg#program=}"
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+session_file="$(ghidra_re_bridge_select_session "$requested_session" "$requested_project" "$requested_program")"
+printf 'Selected session: %s\n' "$session_file"
+"$SCRIPT_DIR/ghidra_bridge_call" /session "{}"

@@ -23,52 +23,46 @@ project_file="$(ghidra_re_project_file "$project_name")"
 ghidra_re_require_tools
 ghidra_re_export_env
 ghidra_re_require_project "$project_name"
-ghidra_re_bridge_prune_stale_session
+ghidra_re_bridge_prune_stale_sessions
 
 if [[ ! -d "$(ghidra_re_bridge_installed_dir)" ]]; then
   "$SCRIPT_DIR/ghidra_bridge_install"
 fi
 
-require_program=0
-if [[ -n "$program_name" ]]; then
-  require_program=1
+existing_session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" 2>/dev/null || true)"
+if [[ -n "$existing_session_file" ]] && ghidra_re_bridge_session_healthy_file "$existing_session_file"; then
+  ghidra_re_bridge_write_current_from_session_file "$existing_session_file"
+  printf 'Bridge already armed at %s\n' "$(ghidra_re_bridge_read_value_from_file "$existing_session_file" bridge_url)"
+  printf 'Session: %s\n' "$existing_session_file"
+  exit 0
 fi
 
-if ghidra_re_bridge_session_healthy && ghidra_re_bridge_session_matches_program "$program_name"; then
-  if ghidra_re_bridge_session_matches_project "$project_name"; then
-    printf 'Bridge already armed at %s\n' "$(ghidra_re_bridge_read_session_value bridge_url)"
-    printf 'Session: %s\n' "$GHIDRA_RE_BRIDGE_SESSION_FILE"
-    exit 0
-  fi
-fi
-
-ghidra_re_bridge_write_control_file arm "$project_name" "$program_name"
+ghidra_re_bridge_write_request_file arm "" "$project_name" "$program_name" >/dev/null
 
 if ghidra_re_ghidra_running; then
   printf 'Waiting for a running Ghidra session to consume the arm request\n'
-  if ghidra_re_bridge_wait_for_session 8 "$require_program" "$program_name"; then
-    printf 'Bridge armed at %s\n' "$(ghidra_re_bridge_read_session_value bridge_url)"
-    printf 'Session: %s\n' "$GHIDRA_RE_BRIDGE_SESSION_FILE"
+  session_file="$(ghidra_re_bridge_wait_for_session 8 "$project_name" "$program_name" || true)"
+  if [[ -n "$session_file" ]]; then
+    ghidra_re_bridge_write_current_from_session_file "$session_file"
+    printf 'Bridge armed at %s\n' "$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
+    printf 'Session: %s\n' "$session_file"
     exit 0
   fi
 fi
 
-if ghidra_re_ghidra_running && [[ -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] && \
-   ghidra_re_bridge_session_matches_project "$project_name"; then
-  printf 'Reusing running Ghidra session\n'
+if ghidra_re_ghidra_running; then
+  printf 'Launching a detached Ghidra instance for %s\n' "$project_name"
+  ghidra_re_launch_gui_project "$project_file" new-instance
 else
-  if ghidra_re_ghidra_running; then
-    printf 'Launching a detached Ghidra instance for %s\n' "$project_name"
-    ghidra_re_launch_gui_project "$project_file" new-instance
-  else
-    printf 'Launching Ghidra for %s\n' "$project_name"
-    ghidra_re_launch_gui_project "$project_file"
-  fi
+  printf 'Launching Ghidra for %s\n' "$project_name"
+  ghidra_re_launch_gui_project "$project_file"
 fi
 
-if ! ghidra_re_bridge_wait_for_session 60 "$require_program" "$program_name"; then
+session_file="$(ghidra_re_bridge_wait_for_session 60 "$project_name" "$program_name" || true)"
+if [[ -z "$session_file" ]]; then
   ghidra_re_die "timed out waiting for bridge session; open the project in Ghidra and run EnableCodexBridge.java once if needed"
 fi
 
-printf 'Bridge armed at %s\n' "$(ghidra_re_bridge_read_session_value bridge_url)"
-printf 'Session: %s\n' "$GHIDRA_RE_BRIDGE_SESSION_FILE"
+ghidra_re_bridge_write_current_from_session_file "$session_file"
+printf 'Bridge armed at %s\n' "$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
+printf 'Session: %s\n' "$session_file"

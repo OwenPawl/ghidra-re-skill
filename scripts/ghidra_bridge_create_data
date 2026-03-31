@@ -7,14 +7,17 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_create_data <address> <datatype>
+Usage: ghidra_bridge_create_data <address> <datatype> [key=value ...]
 EOF
 }
 
-[[ $# -eq 2 ]] || {
+[[ $# -ge 2 ]] || {
   usage >&2
   exit 1
 }
 
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$1" datatype="$2")"
+address="$1"
+datatype="$2"
+shift 2
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$address" datatype="$datatype" "$@")"
 "$SCRIPT_DIR/ghidra_bridge_call" /data/create "$body"
