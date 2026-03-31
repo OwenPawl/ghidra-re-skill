@@ -1,12 +1,13 @@
 # ghidra-re
 
-`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
+`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS and Windows, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
 
 ## What it includes
 
 - Headless import and analysis helpers
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
 - A multi-session live Ghidra bridge registry for several open targets at once
+- Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
 - Function dossiers, write-back helpers, and optional bug-hunt overlays
 - A live Ghidra bridge extension for navigation, decompilation, comments, renames, and controlled program surgery
@@ -16,6 +17,7 @@
 
 - [SKILL.md](./SKILL.md): skill entrypoint and workflow instructions
 - [scripts](./scripts): shell wrappers and builders
+- [powershell](./powershell): native PowerShell module for Windows-first usage
 - [bridge-extension](./bridge-extension): Ghidra bridge source and prebuilt extension zips
 - [references](./references): notes, schemas, and heuristics
 - [agents/openai.yaml](./agents/openai.yaml): skill metadata for Codex discovery
@@ -46,6 +48,7 @@ If you want a one-file Windows installer bundle:
 
 That creates a zip with a PowerShell installer that can:
 - install the skill into `%USERPROFILE%\.codex\skills\ghidra-re`
+- install a user-scoped `GhidraRe` PowerShell module
 - install Git for Windows when Git Bash is missing
 - install Java 21 when needed
 - reuse an existing Ghidra install or unpack a `ghidra_*.zip` placed next to the installer
@@ -76,7 +79,7 @@ You can override both:
 - Java 21
 - Codex with local skill support
 
-On Windows, the scripts are intended to run from Git Bash.
+On Windows, you can now use either Git Bash or the native `GhidraRe` PowerShell module.
 
 The default local assumptions are:
 
@@ -92,6 +95,18 @@ The default local assumptions are:
 - Workspace: `~/ghidra-projects`
 
 ## Windows Apple-target flow
+
+The Windows installer now installs a PowerShell module named `GhidraRe`. After install:
+
+```powershell
+Import-Module GhidraRe
+Get-GhidraReBridgeSessions
+Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit'
+```
+
+The module is a native PowerShell-facing layer over the same `ghidra-re` scripts, so it feels normal in PowerShell while still reusing the skill's battle-tested Bash workflow underneath.
+
+If you prefer Bash directly, the source-backed Apple flow is still:
 
 When a Windows machine needs Apple binaries, register a mounted or extracted macOS root as a source:
 
@@ -124,7 +139,9 @@ If you are preparing a Windows share package on another machine and already have
   target=/absolute/path/to/binary \
   target=existing_project:FrameworkName
 ./scripts/ghidra_mission_trace my_mission seed=selector:initWithCoder:
+./scripts/ghidra_mission_autopilot my_mission rounds=2
 ./scripts/ghidra_mission_report my_mission
+./scripts/ghidra_mission_finish my_mission
 ```
 
 For a focused single-target session, the fastest interactive loop is usually:
@@ -136,6 +153,7 @@ For a focused single-target session, the fastest interactive loop is usually:
 ./scripts/ghidra_bridge_functions_search 'SomeFunctionName'
 ./scripts/ghidra_bridge_analyze_target 'SomeFunctionName'
 ./scripts/ghidra_bridge_selector_trace 'someSelector:'
+./scripts/ghidra_bridge_snapshot
 ```
 
 For a live multi-target session, start with the registry:
@@ -160,3 +178,6 @@ The optional bug-hunt layer is still there when you want it:
 - Mission workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
 - The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.
 - The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass, and now supports selecting among multiple live targets.
+- The Windows desktop installer also installs a user PowerShell module so day-to-day Windows use does not have to start in Git Bash.
+- `ghidra_mission_finish` closes the mission's live Ghidra sessions by default, and `ghidra_bridge_close_all all=true` is the emergency cleanup button when you want every bridge-managed Ghidra window gone.
+- `ghidra_polish_release` is the explicit pre-testing pass for syntax, builders, bridge buildability, and packaging.

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+body="$(ghidra_re_bridge_json_from_kv "$@")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-bridge-snapshot.XXXXXX")"
+
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+call_endpoint() {
+  local endpoint="$1"
+  local output_file="$2"
+  if "$SCRIPT_DIR/ghidra_bridge_call" "$endpoint" "$body" >"$output_file" 2>"$output_file.err"; then
+    :
+  else
+    python3 - "$endpoint" "$output_file.err" >"$output_file" <<'PY'
+import json, pathlib, sys
+endpoint = sys.argv[1]
+stderr_path = pathlib.Path(sys.argv[2])
+message = stderr_path.read_text(encoding="utf-8").strip()
+print(json.dumps({"ok": False, "error": f"{endpoint}: {message}"}))
+PY
+  fi
+}
+
+call_endpoint /session "$tmp_dir/session.json"
+call_endpoint /function "$tmp_dir/function.json"
+call_endpoint /decompile "$tmp_dir/decompile.json"
+call_endpoint /references "$tmp_dir/references.json"
+call_endpoint /variables "$tmp_dir/variables.json"
+
+python3 - "$tmp_dir/session.json" "$tmp_dir/function.json" "$tmp_dir/decompile.json" "$tmp_dir/references.json" "$tmp_dir/variables.json" <<'PY'
+import datetime as dt
+import json
+import pathlib
+import sys
+
+def load_payload(path_str):
+    path = pathlib.Path(path_str)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+session_payload = load_payload(sys.argv[1])
+function_payload = load_payload(sys.argv[2])
+decompile_payload = load_payload(sys.argv[3])
+references_payload = load_payload(sys.argv[4])
+variables_payload = load_payload(sys.argv[5])
+
+session_result = session_payload.get("result", {}) if isinstance(session_payload, dict) else {}
+
+snapshot = {
+    "snapshot_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "session": session_payload,
+    "function": function_payload,
+    "decompile": decompile_payload,
+    "references": references_payload,
+    "variables": variables_payload,
+    "current_context": session_result.get("current_context", {}),
+    "repository": session_result.get("repository", {}),
+}
+
+print(json.dumps(snapshot, indent=2))
+PY
+

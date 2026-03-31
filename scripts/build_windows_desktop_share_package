@@ -236,6 +236,23 @@ function Ensure-Ghidra {
   throw "Ghidra was not found. Place a ghidra_*.zip next to the installer or set GHIDRA_INSTALL_DIR before rerunning."
 }
 
+function Install-GhidraRePowerShellModule {
+  $moduleRoots = @(
+    (Join-Path $env:USERPROFILE "Documents\PowerShell\Modules"),
+    (Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\Modules")
+  ) | Select-Object -Unique
+
+  foreach ($root in $moduleRoots) {
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $destination = Join-Path $root "GhidraRe"
+    if (Test-Path $destination) {
+      Remove-Item $destination -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+    Copy-Item (Join-Path $TargetDir "powershell\*") $destination -Recurse -Force
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $InstallBase | Out-Null
 if (Test-Path $TargetDir) {
   $backup = "$TargetDir.backup-$Timestamp"
@@ -252,6 +269,8 @@ $ghidraDir = Ensure-Ghidra
 $env:GHIDRA_INSTALL_DIR = $ghidraDir
 $env:GHIDRA_JDK = $jdkDir
 
+Install-GhidraRePowerShellModule
+
 $bootstrapPath = Join-Path $TargetDir "scripts\bootstrap"
 $bootstrapBashPath = To-BashPath $bootstrapPath $cygpathPath
 
@@ -261,7 +280,11 @@ Say "Running bootstrap from Git Bash"
 Say "Installed ghidra-re to $TargetDir"
 Say "Ghidra: $ghidraDir"
 Say "JDK: $jdkDir"
+Say "PowerShell module: GhidraRe"
 Say "Config: $(Join-Path $ConfigDir 'config.env')"
+Say "To start from PowerShell:"
+Say "  Import-Module GhidraRe"
+Say "  Get-GhidraReBridgeSessions"
 Say "If your Apple binaries live in a mounted macOS image, add it after install:"
 Say "  ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache"
 EOF
@@ -273,6 +296,7 @@ ghidra-re Windows desktop share package
 2. Double-click "Install Ghidra RE.cmd".
 3. The installer will:
    - copy the skill into %USERPROFILE%\.codex\skills\ghidra-re
+   - install the GhidraRe PowerShell module into your user module paths
    - install Git for Windows with winget if Git Bash is missing
    - install Java 21 with winget if a usable JDK is missing
    - reuse an existing Ghidra install, install an embedded Ghidra zip if present,
@@ -280,7 +304,10 @@ ghidra-re Windows desktop share package
    - run scripts/bootstrap through Git Bash
 
 Notes:
-- The skill is intended to run from Git Bash on Windows.
+- You can use either Git Bash or PowerShell after install.
+- In PowerShell, start with:
+    Import-Module GhidraRe
+    Get-GhidraReBridgeSessions
 - If you want to analyze Apple targets from Windows, mount or extract a macOS root
   and then register it with:
     ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache
