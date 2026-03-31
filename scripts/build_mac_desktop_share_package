@@ -63,6 +63,8 @@ trap cleanup EXIT
 
 mkdir -p "$package_root" "$package_payload_dir"
 rsync -a \
+  --exclude '.git' \
+  --exclude '.git/' \
   --exclude '.DS_Store' \
   --exclude '__MACOSX' \
   --exclude '.gradle/' \

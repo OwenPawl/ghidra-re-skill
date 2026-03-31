@@ -62,6 +62,8 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
    - `scripts/ghidra_bridge_patch_instruction ...`
 13. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
    - `scripts/build_mac_desktop_share_package [output_zip]`
+14. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
+   - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 
 ## Default Workflow
 
@@ -169,6 +171,7 @@ Run these wrappers from the skill directory:
 - `scripts/doctor`
 - `scripts/build_share_package [output_zip]`
 - `scripts/build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]`
+- `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 
 ### Script argument style
 - Prefer `key=value` arguments because they are robust under `analyzeHeadless`.

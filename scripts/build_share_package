@@ -17,6 +17,8 @@ trap cleanup EXIT
 
 mkdir -p "$package_root"
 rsync -a \
+  --exclude '.git' \
+  --exclude '.git/' \
   --exclude '.DS_Store' \
   --exclude '__MACOSX' \
   --exclude '.gradle/' \
@@ -67,9 +69,10 @@ If bootstrap cannot auto-detect Ghidra or Java 21, run:
 The generated machine-local config lives at:
   ~/.config/ghidra-re/config.env
 
-The live bridge session and control files live at:
-  ~/.config/ghidra-re/bridge-session.json
-  ~/.config/ghidra-re/bridge-control.json
+The live bridge registry lives at:
+  ~/.config/ghidra-re/bridge-sessions/
+  ~/.config/ghidra-re/bridge-current.json
+  ~/.config/ghidra-re/bridge-requests/
 
 If Ghidra was already running before install, restart it once or run:
   EnableCodexBridge.java

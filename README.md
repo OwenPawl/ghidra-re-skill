@@ -38,6 +38,18 @@ If you want a one-file Mac installer bundle:
 
 That creates a zip that can install the skill, Ghidra, the launcher app, and Java 21 on another Mac.
 
+If you want a one-file Windows installer bundle:
+
+```bash
+./scripts/build_windows_desktop_share_package
+```
+
+That creates a zip with a PowerShell installer that can:
+- install the skill into `%USERPROFILE%\.codex\skills\ghidra-re`
+- install Git for Windows when Git Bash is missing
+- install Java 21 when needed
+- reuse an existing Ghidra install or unpack a `ghidra_*.zip` placed next to the installer
+
 ## Publish to GitHub
 
 If `gh` is installed and authenticated:
@@ -95,6 +107,12 @@ Mission targets can use the same source form:
 ./scripts/ghidra_mission_start win_trace \
   goal='Trace a subsystem across Apple userland targets' \
   target=source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit
+```
+
+If you are preparing a Windows share package on another machine and already have a Windows Ghidra zip, you can embed it:
+
+```bash
+./scripts/build_windows_desktop_share_package out.zip --ghidra-zip /path/to/ghidra_*.zip
 ```
 
 ## Typical workflow

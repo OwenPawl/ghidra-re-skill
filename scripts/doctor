@@ -41,6 +41,8 @@ configured_ghidra="${GHIDRA_INSTALL_DIR:-}"
 configured_jdk="${GHIDRA_JDK:-}"
 detected_ghidra="$(ghidra_re_detect_ghidra_dir || true)"
 detected_jdk="$(ghidra_re_detect_jdk_dir || true)"
+python_cmd="$(ghidra_re_python || true)"
+bash_cmd="$(command -v bash || true)"
 
 printf 'ghidra-re doctor\n'
 printf 'Skill root: %s\n' "$GHIDRA_RE_ROOT"
@@ -63,6 +65,8 @@ fi
 
 show_candidate "Detected Ghidra candidate" "$detected_ghidra"
 show_candidate "Detected JDK candidate" "$detected_jdk"
+show_candidate "Detected Python" "$python_cmd"
+show_candidate "Detected Bash" "$bash_cmd"
 
 for path in \
   "$GHIDRA_WORKSPACE" \

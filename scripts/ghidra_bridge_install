@@ -31,7 +31,16 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$extensions_dir"
-unzip -q "$zip_path" -d "$tmp_root"
+"$(ghidra_re_python)" - "$zip_path" "$tmp_root" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+zip_path = pathlib.Path(sys.argv[1])
+target_dir = pathlib.Path(sys.argv[2])
+with zipfile.ZipFile(zip_path) as archive:
+    archive.extractall(target_dir)
+PY
 rm -rf "$installed_dir"
 cp -R "$tmp_root/CodexGhidraBridge" "$installed_dir"
 rm -rf "$legacy_installed_dir"
