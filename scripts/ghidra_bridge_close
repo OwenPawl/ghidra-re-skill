@@ -34,7 +34,7 @@ pid="$(ghidra_re_bridge_read_value_from_file "$session_file" pid)"
 
 if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
   command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  if printf '%s' "$command_line" | grep -Eq 'ghidra\.GhidraRun|/Applications/Ghidra/ghidraRun|/Applications/Ghidra/support/launch\.sh'; then
+  if printf '%s' "$command_line" | grep -Eq 'ghidra\.GhidraRun|ghidraRun(\.bat)?|launch\.(sh|bat)'; then
     kill "$pid" >/dev/null 2>&1 || true
   fi
 fi

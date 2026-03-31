@@ -31,6 +31,7 @@ timestamp="$(ghidra_re_timestamp)"
 log_file="$log_dir/bug-hunt-${timestamp}.log"
 script_log="$log_dir/bug-hunt-${timestamp}.script.log"
 script_path="$(ghidra_re_script_path)"
+analyze_headless="$(ghidra_re_analyze_headless_path)"
 
 entrypoints_output="$export_dir/entrypoints.json"
 sinks_output="$export_dir/sinks.json"
@@ -57,7 +58,7 @@ case "${GHIDRA_BUG_HUNT_ANALYZE:-0}" in
 esac
 
 cmd=(
-  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$analyze_headless"
   "$(ghidra_re_project_location "$project_name")"
   "$project_name"
   -process "$program_name"

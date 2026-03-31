@@ -5,10 +5,14 @@ description: Use for Ghidra-based reverse engineering on this machine, especiall
 
 # Ghidra RE
 
-Use this skill for repeatable, headless-first Ghidra work on macOS. It assumes:
+Use this skill for repeatable, headless-first Ghidra work on macOS or Windows. It assumes:
 
-- Ghidra install: `/Applications/Ghidra`
-- JDK: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+- Ghidra install:
+  - macOS: `/Applications/Ghidra`
+  - Windows: `/c/Program Files/Ghidra`
+- JDK:
+  - macOS: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+  - Windows: `/c/Program Files/Eclipse Adoptium/jdk-21`
 - Workspace root: `~/ghidra-projects`
 - Skill root: `~/.codex/skills/ghidra-re`
 
@@ -20,14 +24,16 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 
 1. On a fresh machine, run `scripts/bootstrap` once.
 2. If bootstrap cannot find Ghidra or Java 21, run `scripts/doctor`.
-3. Start a multi-target mission when the task spans more than one framework, daemon, or helper:
+3. On Windows, if the targets live in a mounted or extracted macOS image, register that source first:
+   - `scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache`
+4. Start a multi-target mission when the task spans more than one framework, daemon, or helper:
    - `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
-4. Extend the mission with a seed-driven trace:
+5. Extend the mission with a seed-driven trace:
    - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value>`
-5. Read the mission report:
+6. Read the mission report:
    - `scripts/ghidra_mission_report <mission_name>`
-6. For a single target, import and analyze into a dedicated project:
-   - `scripts/ghidra_import_analyze <binary> [project_name]`
+7. For a single target, import and analyze into a dedicated project:
+   - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
 7. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
 8. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
@@ -65,6 +71,7 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 - Exports live under `~/ghidra-projects/exports/<project_name>/<program_name>/`.
 - Logs live under `~/ghidra-projects/logs/<project_name>/`.
 - Multi-target investigation workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
+- Source-backed imports are cached under `~/ghidra-projects/sources/<source_name>/` by default when you use `source:name:/path`.
 - Prefer explicit project names for reusable work. If omitted, the import wrapper derives one from the binary basename.
 
 ### 2) Use missions for cross-target work
@@ -151,6 +158,9 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_bridge_delete_function <function_or_address>`
 - `scripts/ghidra_bridge_create_data <address> <datatype>`
 - `scripts/ghidra_bridge_delete_data <address> [end]`
+- `scripts/ghidra_source_add <name> root=<path> [platform=macos-image] [copy=cache|direct]`
+- `scripts/ghidra_source_list`
+- `scripts/ghidra_source_resolve <name> </path/in/image> [copy=cache|direct]`
 - `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
 - `scripts/ghidra_mission_status <mission_name>`
 - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value> [target=project:program]`

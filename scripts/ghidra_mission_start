@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_mission_start <mission_name> goal=<goal> target=<binary|project:program> [target=...] [seed=<kind:value>] [seed=...] [mode=trace]
+Usage: ghidra_mission_start <mission_name> goal=<goal> target=<binary|project:program|source:name:/path/in/image> [target=...] [seed=<kind:value>] [seed=...] [mode=trace]
 EOF
 }
 
@@ -84,8 +84,8 @@ resolve_target_spec() {
   local binary_path=""
   local project_name=""
   local program_name=""
-  if [[ "$spec" == /* && -f "$spec" ]]; then
-    binary_path="$spec"
+  binary_path="$(ghidra_re_resolve_binary_spec "$spec" cache || true)"
+  if [[ -n "$binary_path" && -f "$binary_path" ]]; then
     program_name="$(ghidra_re_program_name_from_binary "$binary_path")"
     project_name="${mission_slug}-$(ghidra_re_sanitize_name "$program_name")"
     if [[ ! -f "$(ghidra_re_project_file "$project_name")" ]]; then
@@ -101,7 +101,7 @@ resolve_target_spec() {
     [[ -n "$project_name" && -n "$program_name" ]] || ghidra_re_die "invalid target ref: $spec"
     ghidra_re_require_project "$project_name"
   else
-    ghidra_re_die "target must be an absolute binary path or project:program reference: $spec"
+    ghidra_re_die "target must be a binary path, source:name:/path reference, or project:program reference: $spec"
   fi
   printf '%s|%s|%s\n' "$binary_path" "$project_name" "$program_name"
 }

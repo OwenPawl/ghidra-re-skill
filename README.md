@@ -59,17 +59,43 @@ You can override both:
 
 ## Requirements
 
-- macOS
+- macOS or Windows
 - Ghidra 12.0.4
 - Java 21
 - Codex with local skill support
 
+On Windows, the scripts are intended to run from Git Bash.
+
 The default local assumptions are:
 
-- Ghidra install: `/Applications/Ghidra`
-- Launcher app: `/Applications/Ghidra.app`
-- JDK: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+- Ghidra install:
+  - macOS: `/Applications/Ghidra`
+  - Windows: `/c/Program Files/Ghidra`
+- Launcher app:
+  - macOS: `/Applications/Ghidra.app`
+  - Windows: `ghidraRun.bat`
+- JDK:
+  - macOS: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+  - Windows: `/c/Program Files/Eclipse Adoptium/jdk-21`
 - Workspace: `~/ghidra-projects`
+
+## Windows Apple-target flow
+
+When a Windows machine needs Apple binaries, register a mounted or extracted macOS root as a source:
+
+```bash
+./scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache
+./scripts/ghidra_source_list
+./scripts/ghidra_import_analyze source:mac-image:/System/Library/PrivateFrameworks/VoiceShortcuts.framework/Versions/A/VoiceShortcuts
+```
+
+Mission targets can use the same source form:
+
+```bash
+./scripts/ghidra_mission_start win_trace \
+  goal='Trace a subsystem across Apple userland targets' \
+  target=source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit
+```
 
 ## Typical workflow
 

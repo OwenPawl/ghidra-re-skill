@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_import_analyze <binary> [project_name]
+Usage: ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]
 EOF
 }
 
@@ -16,8 +16,8 @@ EOF
   exit 1
 }
 
-binary_path="$1"
-[[ -f "$binary_path" ]] || ghidra_re_die "binary not found: $binary_path"
+binary_path="$(ghidra_re_resolve_binary_spec "$1" cache || true)"
+[[ -f "$binary_path" ]] || ghidra_re_die "binary not found or source spec could not be resolved: $1"
 
 project_name="${2:-$(ghidra_re_sanitize_name "$(basename "$binary_path")")}"
 program_name="$(ghidra_re_program_name_from_binary "$binary_path")"
@@ -27,6 +27,7 @@ timestamp="$(ghidra_re_timestamp)"
 log_file="$log_dir/import-${timestamp}.log"
 script_log="$log_dir/import-${timestamp}.script.log"
 script_path="$(ghidra_re_script_path)"
+analyze_headless="$(ghidra_re_analyze_headless_path)"
 
 ghidra_re_require_tools
 ghidra_re_export_env
@@ -39,7 +40,7 @@ while IFS= read -r -d '' item; do
 done < <(ghidra_re_optional_headless_args)
 
 cmd=(
-  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$analyze_headless"
   "$project_location"
   "$project_name"
   -import "$binary_path"

@@ -41,6 +41,10 @@ Bridge-specific files:
   - arm/disarm requests consumed by the GUI helper and the live bridge service
 - `~/ghidra-projects/logs/<project_name>/bridge-ops/<timestamp>-<op>.json`
   - destructive bridge operation logs including request body, before-state, after-state summary, target refs, and inverse hints for single-op rollback
+- `~/.config/ghidra-re/sources.json`
+  - registered external source roots such as mounted or extracted macOS images for Windows or Linux hosts
+- `~/ghidra-projects/sources/<source_name>/...`
+  - cached copies of files resolved from a registered source when `copy=cache` is used
 
 Mission-specific files:
 

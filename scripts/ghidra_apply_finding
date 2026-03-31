@@ -73,6 +73,7 @@ timestamp="$(ghidra_re_timestamp)"
 log_file="$log_dir/finding-${slug}-${timestamp}.log"
 script_log="$log_dir/finding-${slug}-${timestamp}.script.log"
 script_path="$(ghidra_re_script_path)"
+analyze_headless="$(ghidra_re_analyze_headless_path)"
 
 mkdir -p "$finding_dir" "$log_dir"
 
@@ -82,7 +83,7 @@ while IFS= read -r -d '' item; do
 done < <(ghidra_re_optional_headless_args)
 
 cmd=(
-  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$analyze_headless"
   "$(ghidra_re_project_location "$project_name")"
   "$project_name"
   -process "$program_name"

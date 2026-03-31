@@ -38,46 +38,60 @@ rm -rf "$legacy_installed_dir"
 
 if [[ -d "$tools_dir" ]]; then
   while IFS= read -r tool_file; do
-    /usr/bin/ruby -e '
-path = ARGV[0]
-xml = File.read(path)
-xml.gsub!(%r{\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>}m, "")
-xml.gsub!(%r{\n\s*<INCLUDE CLASS="codexghidrabridge\.CodexBridgePlugin" />}, "")
-if File.basename(path) == "_code_browser.tcd" && !xml.include?("codexghidrabridge.CodexBridgePlugin")
-  if xml.sub!(%r{(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)}m,
-      "\\1\n            <INCLUDE CLASS=\"codexghidrabridge.CodexBridgePlugin\" />\\2")
-  elsif xml.sub!(%r{<PACKAGE NAME="Ghidra Core"\s*/>}, <<~XML.chomp)
-        <PACKAGE NAME="Ghidra Core">
-            <INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />
-        </PACKAGE>
-XML
-  end
-end
-if xml != File.read(path)
-  File.write(path, xml)
-end
-' "$tool_file"
+    "$(ghidra_re_python)" - "$tool_file" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+xml = path.read_text(encoding="utf-8")
+original = xml
+xml = re.sub(r'\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>', '', xml, flags=re.S)
+xml = re.sub(r'\n\s*<INCLUDE CLASS="codexghidrabridge\.CodexBridgePlugin" />', '', xml)
+if path.name == "_code_browser.tcd" and "codexghidrabridge.CodexBridgePlugin" not in xml:
+    replacement = '\n            <INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />'
+    xml, count = re.subn(r'(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)', r'\1' + replacement + r'\2', xml, count=1, flags=re.S)
+    if count == 0:
+        xml = re.sub(
+            r'<PACKAGE NAME="Ghidra Core"\s*/>',
+            '<PACKAGE NAME="Ghidra Core">\n            <INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />\n        </PACKAGE>',
+            xml,
+            count=1,
+        )
+if xml != original:
+    path.write_text(xml, encoding="utf-8")
+PY
   done < <(find "$tools_dir" -maxdepth 1 -type f -name '*.tcd' | sort)
 fi
 
 if [[ -f "$frontend_tool_file" ]]; then
-  /usr/bin/ruby -e '
-path = ARGV[0]
-xml = File.read(path)
-xml.gsub!(%r{\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>}m, "")
-unless xml.include?("codexghidrabridge.CodexBridgeFrontEndPlugin")
-  if xml.sub!(%r{<PACKAGE NAME="Ghidra Core"\s*/>}, <<~XML.chomp)
-            <PACKAGE NAME="Ghidra Core">
-                <INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />
-            </PACKAGE>
-XML
-  elsif xml.sub!(%r{(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)}m, "\\1\n                <INCLUDE CLASS=\"codexghidrabridge.CodexBridgeFrontEndPlugin\" />\\2")
-  end
-end
-if xml != File.read(path)
-  File.write(path, xml)
-end
-' "$frontend_tool_file"
+  "$(ghidra_re_python)" - "$frontend_tool_file" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+xml = path.read_text(encoding="utf-8")
+original = xml
+xml = re.sub(r'\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>', '', xml, flags=re.S)
+if "codexghidrabridge.CodexBridgeFrontEndPlugin" not in xml:
+    xml, count = re.subn(
+        r'<PACKAGE NAME="Ghidra Core"\s*/>',
+        '<PACKAGE NAME="Ghidra Core">\n                <INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />\n            </PACKAGE>',
+        xml,
+        count=1,
+    )
+    if count == 0:
+        xml = re.sub(
+            r'(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)',
+            r'\1\n                <INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />\2',
+            xml,
+            count=1,
+            flags=re.S,
+        )
+if xml != original:
+    path.write_text(xml, encoding="utf-8")
+PY
 fi
 
 printf 'Installed bridge extension to %s\n' "$installed_dir"
