@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+response="$("$SCRIPT_DIR/ghidra_bridge_call" /session '{}')"
+printf '%s' "$response" | /usr/bin/ruby -rjson -e '
+payload = JSON.parse(STDIN.read)
+STDOUT.write(JSON.pretty_generate(payload.fetch("result").fetch("current_context")))
+'

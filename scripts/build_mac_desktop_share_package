@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]
+
+Builds a macOS-friendly share archive that can install:
+  - the ghidra-re skill into ~/.codex/skills/ghidra-re
+  - Ghidra into /Applications/Ghidra using an embedded payload when available
+  - the lightweight /Applications/Ghidra.app launcher
+
+By default the package embeds the local /Applications/Ghidra payload if it exists.
+Use --without-ghidra-payload to build a smaller archive that falls back to Homebrew.
+EOF
+}
+
+include_ghidra_payload=1
+output_path=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --without-ghidra-payload)
+      include_ghidra_payload=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [[ -z "$output_path" ]]; then
+        output_path="$1"
+        shift
+      else
+        ghidra_re_die "unexpected argument: $1"
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$output_path" ]]; then
+  output_path="$PWD/ghidra-re-mac-desktop-share-$(date '+%Y%m%d-%H%M%S').zip"
+fi
+
+stage_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-re-mac-share.XXXXXX")"
+package_root="$stage_root/ghidra-re-mac-desktop-share"
+package_skill_dir="$package_root/ghidra-re"
+package_payload_dir="$package_root/payload"
+ghidra_payload_name=""
+ghidra_app_payload_name=""
+ghidra_source_dir=""
+ghidra_version="$(ghidra_re_detect_ghidra_version || true)"
+
+cleanup() {
+  rm -rf "$stage_root"
+}
+trap cleanup EXIT
+
+mkdir -p "$package_root" "$package_payload_dir"
+rsync -a \
+  --exclude '.DS_Store' \
+  --exclude '__MACOSX' \
+  --exclude '.gradle/' \
+  --exclude 'build/' \
+  "$GHIDRA_RE_ROOT/" \
+  "$package_skill_dir/"
+
+if [[ "$include_ghidra_payload" -eq 1 ]]; then
+  ghidra_source_dir="$(ghidra_re_detect_ghidra_dir || true)"
+  [[ -n "$ghidra_source_dir" ]] || ghidra_re_die "requested embedded Ghidra payload, but no local Ghidra install was detected"
+
+  ghidra_payload_name="Ghidra.tar.gz"
+  tar -C "$(dirname "$ghidra_source_dir")" -czf "$package_payload_dir/$ghidra_payload_name" "$(basename "$ghidra_source_dir")"
+
+  if [[ -d /Applications/Ghidra.app ]]; then
+    ghidra_app_payload_name="Ghidra.app.tar.gz"
+    tar -C /Applications -czf "$package_payload_dir/$ghidra_app_payload_name" "Ghidra.app"
+  fi
+fi
+
+cat >"$package_root/package-info.json" <<EOF
+{
+  "package_name": "ghidra-re-mac-desktop-share",
+  "built_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "skill_name": "ghidra-re",
+  "ghidra_version": "${ghidra_version:-unknown}",
+  "embedded_ghidra_payload": $( [[ -n "$ghidra_payload_name" ]] && printf 'true' || printf 'false' ),
+  "embedded_ghidra_launcher": $( [[ -n "$ghidra_app_payload_name" ]] && printf 'true' || printf 'false' )
+}
+EOF
+
+cat >"$package_root/Install Ghidra RE.command" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PACKAGE_SKILL_DIR="$SCRIPT_DIR/ghidra-re"
+PACKAGE_PAYLOAD_DIR="$SCRIPT_DIR/payload"
+PACKAGE_INFO="$SCRIPT_DIR/package-info.json"
+INSTALL_BASE="${CODEX_HOME:-$HOME/.codex}/skills"
+TARGET_DIR="$INSTALL_BASE/ghidra-re"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ghidra-re"
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+GHIDRA_TARGET="/Applications/Ghidra"
+GHIDRA_APP_TARGET="/Applications/Ghidra.app"
+
+say() {
+  printf '%s\n' "$*"
+}
+
+valid_ghidra_dir() {
+  local dir="${1:-}"
+  [[ -n "$dir" && -x "$dir/support/analyzeHeadless" && -x "$dir/ghidraRun" ]]
+}
+
+valid_jdk_dir() {
+  local dir="${1:-}"
+  [[ -n "$dir" && -x "$dir/bin/java" ]]
+}
+
+maybe_sudo() {
+  if "$@" 2>/dev/null; then
+    return 0
+  fi
+  sudo "$@"
+}
+
+backup_path_if_needed() {
+  local path="$1"
+  if [[ -e "$path" || -L "$path" ]]; then
+    maybe_sudo mv "$path" "${path}.backup-${TIMESTAMP}"
+    say "Backed up existing $(basename "$path") to ${path}.backup-${TIMESTAMP}"
+  fi
+}
+
+detect_jdk_dir() {
+  local candidate=""
+  for candidate in \
+    /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+    /usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  do
+    if valid_jdk_dir "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  if [[ -x /usr/libexec/java_home ]]; then
+    candidate="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
+    if valid_jdk_dir "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+detect_brew_ghidra_dir() {
+  local prefix=""
+  local cellar=""
+  local candidate=""
+
+  if ! command -v brew >/dev/null 2>&1; then
+    return 1
+  fi
+
+  prefix="$(brew --prefix ghidra 2>/dev/null || true)"
+  for candidate in "$prefix/libexec" "$prefix"; do
+    if valid_ghidra_dir "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  cellar="$(brew --cellar ghidra 2>/dev/null || true)"
+  if [[ -n "$cellar" && -d "$cellar" ]]; then
+    while IFS= read -r candidate; do
+      if valid_ghidra_dir "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done < <(find "$cellar" -maxdepth 2 -type d \( -name libexec -o -name ghidra -o -name Ghidra \) | sort -r)
+  fi
+
+  return 1
+}
+
+ensure_java() {
+  local jdk_dir=""
+  jdk_dir="$(detect_jdk_dir || true)"
+  if [[ -n "$jdk_dir" ]]; then
+    say "Using Java 21 at $jdk_dir"
+    return 0
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    say "Installing Java 21 with Homebrew"
+    brew install openjdk@21
+    jdk_dir="$(detect_jdk_dir || true)"
+    [[ -n "$jdk_dir" ]] || {
+      say "Java 21 install finished, but no usable JDK was detected."
+      return 1
+    }
+    say "Using Java 21 at $jdk_dir"
+    return 0
+  fi
+
+  say "Java 21 is required, and Homebrew is not available for automatic install."
+  return 1
+}
+
+install_tree_from_tarball() {
+  local tarball="$1"
+  local target="$2"
+  local tmp_root=""
+  local extracted_name=""
+  tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-re-install.XXXXXX")"
+  tar -xzf "$tarball" -C "$tmp_root"
+  extracted_name="$(find "$tmp_root" -mindepth 1 -maxdepth 1 | head -n 1)"
+  [[ -n "$extracted_name" ]] || {
+    rm -rf "$tmp_root"
+    return 1
+  }
+  backup_path_if_needed "$target"
+  maybe_sudo mkdir -p "$(dirname "$target")"
+  maybe_sudo ditto "$extracted_name" "$target"
+  rm -rf "$tmp_root"
+}
+
+ensure_ghidra() {
+  local detected=""
+  local tarball=""
+
+  if valid_ghidra_dir "$GHIDRA_TARGET"; then
+    say "Using existing Ghidra at $GHIDRA_TARGET"
+    return 0
+  fi
+
+  tarball="$PACKAGE_PAYLOAD_DIR/Ghidra.tar.gz"
+  if [[ -f "$tarball" ]]; then
+    say "Installing embedded Ghidra payload to $GHIDRA_TARGET"
+    install_tree_from_tarball "$tarball" "$GHIDRA_TARGET"
+    if [[ -f "$PACKAGE_PAYLOAD_DIR/Ghidra.app.tar.gz" && ! -d "$GHIDRA_APP_TARGET" ]]; then
+      say "Installing Ghidra launcher app to $GHIDRA_APP_TARGET"
+      install_tree_from_tarball "$PACKAGE_PAYLOAD_DIR/Ghidra.app.tar.gz" "$GHIDRA_APP_TARGET"
+    fi
+    valid_ghidra_dir "$GHIDRA_TARGET" || {
+      say "Embedded Ghidra install completed, but the app is not usable."
+      return 1
+    }
+    say "Installed Ghidra at $GHIDRA_TARGET"
+    return 0
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    say "Installing Ghidra with Homebrew"
+    brew install ghidra
+    detected="$(detect_brew_ghidra_dir || true)"
+    [[ -n "$detected" ]] || {
+      say "Homebrew finished, but no usable Ghidra install was detected."
+      return 1
+    }
+    if [[ "$detected" != "$GHIDRA_TARGET" ]]; then
+      backup_path_if_needed "$GHIDRA_TARGET"
+      maybe_sudo mkdir -p "$(dirname "$GHIDRA_TARGET")"
+      maybe_sudo ln -sfn "$detected" "$GHIDRA_TARGET"
+    fi
+    say "Installed Ghidra via Homebrew at $detected"
+    return 0
+  fi
+
+  say "Ghidra is required, and this package does not include an embedded payload."
+  return 1
+}
+
+install_skill() {
+  mkdir -p "$INSTALL_BASE"
+  if [[ -e "$TARGET_DIR" ]]; then
+    mv "$TARGET_DIR" "${TARGET_DIR}.backup-${TIMESTAMP}"
+    say "Backed up existing skill to ${TARGET_DIR}.backup-${TIMESTAMP}"
+  fi
+  cp -R "$PACKAGE_SKILL_DIR" "$TARGET_DIR"
+  chmod +x "$TARGET_DIR"/scripts/*
+}
+
+main() {
+  say "Installing ghidra-re for macOS"
+  [[ -d "$PACKAGE_SKILL_DIR" ]] || {
+    say "Skill payload is missing."
+    exit 1
+  }
+
+  ensure_ghidra
+  ensure_java
+  install_skill
+
+  if "$TARGET_DIR/scripts/bootstrap"; then
+    say
+    say "Install complete."
+    say "Skill: $TARGET_DIR"
+    say "Config: $CONFIG_DIR/config.env"
+    say "Workspace: $HOME/ghidra-projects"
+    say "Launch Ghidra from /Applications/Ghidra.app or /Applications/Ghidra/ghidraRun"
+  else
+    say
+    say "The skill was copied to $TARGET_DIR, but bootstrap failed."
+    say "Run $TARGET_DIR/scripts/doctor for a full report."
+    exit 1
+  fi
+}
+
+main "$@"
+EOF
+
+cat >"$package_root/README.txt" <<'EOF'
+ghidra-re mac desktop share package
+
+Fast path:
+1. Unzip this archive.
+2. Double-click "Install Ghidra RE.command" or run it from Terminal.
+3. The installer will:
+   - install Ghidra into /Applications/Ghidra when needed
+   - install the Ghidra launcher app into /Applications/Ghidra.app when available
+   - install Java 21 with Homebrew when needed
+   - copy ghidra-re into ~/.codex/skills/ghidra-re
+   - run scripts/bootstrap so the bridge and workspace are ready
+
+Notes:
+- If /Applications/Ghidra already exists and is usable, the installer reuses it.
+- The skill's machine-local config is written to ~/.config/ghidra-re/config.env
+- The bridge session and control files live under ~/.config/ghidra-re/
+- If Ghidra was already running before install, restart it once so the bridge plugin loads cleanly.
+
+After install, Codex can use:
+  ~/.codex/skills/ghidra-re/SKILL.md
+
+And you can launch Ghidra from:
+  /Applications/Ghidra.app
+EOF
+
+chmod +x "$package_root/Install Ghidra RE.command" "$package_skill_dir"/scripts/*
+
+mkdir -p "$(dirname "$output_path")"
+rm -f "$output_path"
+(
+  cd "$stage_root"
+  zip -qry "$output_path" "ghidra-re-mac-desktop-share"
+)
+
+printf 'Built mac desktop share package: %s\n' "$output_path"

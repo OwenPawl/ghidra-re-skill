@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ghidra RE"
+  short_description: "Headless Ghidra workflow for Apple RE and bug-hunting triage"
+  default_prompt: "Use $ghidra-re to import this Apple binary into Ghidra, export the Apple bundle, run the bug-hunt bundle, and generate dossiers for the top candidates."
+
+policy:
+  allow_implicit_invocation: true

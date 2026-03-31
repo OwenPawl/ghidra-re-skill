@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+ghidra_re_bridge_prune_stale_session
+
+if [[ ! -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]]; then
+  rm -f "$GHIDRA_RE_BRIDGE_CONTROL_FILE"
+  printf 'Bridge already disarmed\n'
+  exit 0
+fi
+
+ghidra_re_bridge_write_control_file disarm "" ""
+
+if ! ghidra_re_bridge_wait_for_disarm 15; then
+  if ! ghidra_re_bridge_session_healthy; then
+    ghidra_re_bridge_clear_state_files
+    printf 'Bridge disarmed (cleared stale session state)\n'
+    exit 0
+  fi
+  ghidra_re_die "timed out waiting for bridge to disarm"
+fi
+
+printf 'Bridge disarmed\n'

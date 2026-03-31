@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+settings_dir="$(ghidra_re_bridge_settings_dir)"
+extensions_dir="$(ghidra_re_bridge_extensions_dir)"
+installed_dir="$(ghidra_re_bridge_installed_dir)"
+tools_dir="$(ghidra_re_bridge_tools_dir)"
+frontend_tool_file="$settings_dir/FrontEndTool.xml"
+legacy_installed_dir="$settings_dir/Extensions/Ghidra/CodexGhidraBridge"
+zip_path=""
+
+ghidra_re_require_tools
+ghidra_re_export_env
+
+if [[ ! -d "$GHIDRA_RE_BRIDGE_DIST_DIR" ]] || \
+   ! find "$GHIDRA_RE_BRIDGE_DIST_DIR" -maxdepth 1 -type f -name 'ghidra_*_CodexGhidraBridge.zip' | grep -q .
+then
+  "$SCRIPT_DIR/ghidra_bridge_build"
+fi
+
+zip_path="$(ghidra_re_bridge_dist_zip)"
+
+tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-bridge-install.XXXXXX")"
+cleanup() {
+  rm -rf "$tmp_root"
+}
+trap cleanup EXIT
+
+mkdir -p "$extensions_dir"
+unzip -q "$zip_path" -d "$tmp_root"
+rm -rf "$installed_dir"
+cp -R "$tmp_root/CodexGhidraBridge" "$installed_dir"
+rm -rf "$legacy_installed_dir"
+
+if [[ -d "$tools_dir" ]]; then
+  while IFS= read -r tool_file; do
+    /usr/bin/ruby -e '
+path = ARGV[0]
+xml = File.read(path)
+xml.gsub!(%r{\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>}m, "")
+xml.gsub!(%r{\n\s*<INCLUDE CLASS="codexghidrabridge\.CodexBridgePlugin" />}, "")
+if File.basename(path) == "_code_browser.tcd" && !xml.include?("codexghidrabridge.CodexBridgePlugin")
+  if xml.sub!(%r{(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)}m,
+      "\\1\n            <INCLUDE CLASS=\"codexghidrabridge.CodexBridgePlugin\" />\\2")
+  elsif xml.sub!(%r{<PACKAGE NAME="Ghidra Core"\s*/>}, <<~XML.chomp)
+        <PACKAGE NAME="Ghidra Core">
+            <INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />
+        </PACKAGE>
+XML
+  end
+end
+if xml != File.read(path)
+  File.write(path, xml)
+end
+' "$tool_file"
+  done < <(find "$tools_dir" -maxdepth 1 -type f -name '*.tcd' | sort)
+fi
+
+if [[ -f "$frontend_tool_file" ]]; then
+  /usr/bin/ruby -e '
+path = ARGV[0]
+xml = File.read(path)
+xml.gsub!(%r{\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>}m, "")
+unless xml.include?("codexghidrabridge.CodexBridgeFrontEndPlugin")
+  if xml.sub!(%r{<PACKAGE NAME="Ghidra Core"\s*/>}, <<~XML.chomp)
+            <PACKAGE NAME="Ghidra Core">
+                <INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />
+            </PACKAGE>
+XML
+  elsif xml.sub!(%r{(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)}m, "\\1\n                <INCLUDE CLASS=\"codexghidrabridge.CodexBridgeFrontEndPlugin\" />\\2")
+  end
+end
+if xml != File.read(path)
+  File.write(path, xml)
+end
+' "$frontend_tool_file"
+fi
+
+printf 'Installed bridge extension to %s\n' "$installed_dir"
+printf 'Ghidra settings: %s\n' "$settings_dir"
+printf 'Restart Ghidra if it was already running.\n'

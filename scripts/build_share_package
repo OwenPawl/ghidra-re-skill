@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+output_path="${1:-$PWD/ghidra-re-skill-share-$(date '+%Y%m%d-%H%M%S').zip}"
+stage_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-re-share.XXXXXX")"
+package_root="$stage_root/ghidra-re-share"
+package_skill_dir="$package_root/ghidra-re"
+
+cleanup() {
+  rm -rf "$stage_root"
+}
+trap cleanup EXIT
+
+mkdir -p "$package_root"
+rsync -a \
+  --exclude '.DS_Store' \
+  --exclude '__MACOSX' \
+  --exclude '.gradle/' \
+  --exclude 'build/' \
+  "$GHIDRA_RE_ROOT/" \
+  "$package_skill_dir/"
+
+cat >"$package_root/install-ghidra-re.sh" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PACKAGE_SKILL_DIR="$SCRIPT_DIR/ghidra-re"
+INSTALL_BASE="${CODEX_HOME:-$HOME/.codex}/skills"
+TARGET_DIR="$INSTALL_BASE/ghidra-re"
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+
+mkdir -p "$INSTALL_BASE"
+
+if [[ -e "$TARGET_DIR" ]]; then
+  BACKUP_DIR="${TARGET_DIR}.backup-${TIMESTAMP}"
+  mv "$TARGET_DIR" "$BACKUP_DIR"
+  printf 'Backed up existing skill to %s\n' "$BACKUP_DIR"
+fi
+
+cp -R "$PACKAGE_SKILL_DIR" "$TARGET_DIR"
+chmod +x "$TARGET_DIR"/scripts/*
+
+if "$TARGET_DIR/scripts/bootstrap"; then
+  printf 'Installed ghidra-re to %s\n' "$TARGET_DIR"
+else
+  printf 'ghidra-re installed to %s but bootstrap failed; run %s/scripts/doctor\n' "$TARGET_DIR" "$TARGET_DIR" >&2
+  exit 1
+fi
+EOF
+
+cat >"$package_root/README.txt" <<'EOF'
+ghidra-re share package
+
+1. Unzip this archive.
+2. Run ./install-ghidra-re.sh
+3. The installer copies the skill into ~/.codex/skills/ghidra-re and runs scripts/bootstrap
+
+If bootstrap cannot auto-detect Ghidra or Java 21, run:
+  ~/.codex/skills/ghidra-re/scripts/doctor
+
+The generated machine-local config lives at:
+  ~/.config/ghidra-re/config.env
+
+The live bridge session and control files live at:
+  ~/.config/ghidra-re/bridge-session.json
+  ~/.config/ghidra-re/bridge-control.json
+
+If Ghidra was already running before install, restart it once or run:
+  EnableCodexBridge.java
+from Ghidra's Script Manager.
+EOF
+
+chmod +x "$package_root/install-ghidra-re.sh" "$package_skill_dir"/scripts/*
+
+mkdir -p "$(dirname "$output_path")"
+rm -f "$output_path"
+(
+  cd "$stage_root"
+  zip -qr "$output_path" "ghidra-re-share"
+)
+
+printf 'Built share package: %s\n' "$output_path"

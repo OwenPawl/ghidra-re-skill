@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_import_analyze <binary> [project_name]
+EOF
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+binary_path="$1"
+[[ -f "$binary_path" ]] || ghidra_re_die "binary not found: $binary_path"
+
+project_name="${2:-$(ghidra_re_sanitize_name "$(basename "$binary_path")")}"
+program_name="$(ghidra_re_program_name_from_binary "$binary_path")"
+project_location="$(ghidra_re_project_location "$project_name")"
+log_dir="$(ghidra_re_log_dir "$project_name")"
+timestamp="$(ghidra_re_timestamp)"
+log_file="$log_dir/import-${timestamp}.log"
+script_log="$log_dir/import-${timestamp}.script.log"
+script_path="$(ghidra_re_script_path)"
+
+ghidra_re_require_tools
+ghidra_re_export_env
+ghidra_re_ensure_workspace
+mkdir -p "$project_location" "$log_dir"
+
+optional_args=()
+while IFS= read -r -d '' item; do
+  optional_args+=("$item")
+done < <(ghidra_re_optional_headless_args)
+
+cmd=(
+  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$project_location"
+  "$project_name"
+  -import "$binary_path"
+  -overwrite
+  -scriptPath "$script_path"
+)
+if ghidra_re_flag_enabled "${GHIDRA_IMPORT_DEMANGLE:-1}"; then
+  cmd+=(-postScript DemangleAllScript.java)
+fi
+if [[ ${#optional_args[@]} -gt 0 ]]; then
+  cmd+=("${optional_args[@]}")
+fi
+cmd+=(
+  -log "$log_file"
+  -scriptlog "$script_log"
+)
+
+"${cmd[@]}"
+
+printf 'Imported %s\n' "$binary_path"
+printf 'Project: %s\n' "$project_name"
+printf 'Program: %s\n' "$program_name"
+printf 'Project file: %s\n' "$(ghidra_re_project_file "$project_name")"
+printf 'Log: %s\n' "$log_file"
+printf 'Script log: %s\n' "$script_log"

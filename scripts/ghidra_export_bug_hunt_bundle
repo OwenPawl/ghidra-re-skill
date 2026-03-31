@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_export_bug_hunt_bundle <project_name> <program_name>
+EOF
+}
+
+[[ $# -eq 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+project_name="$1"
+program_name="$2"
+
+ghidra_re_require_tools
+ghidra_re_export_env
+ghidra_re_ensure_workspace
+ghidra_re_require_project "$project_name"
+
+manifest_path="$(ghidra_re_bug_hunt_manifest)"
+export_dir="$(ghidra_re_bug_hunt_dir "$project_name" "$program_name")"
+log_dir="$(ghidra_re_log_dir "$project_name")"
+timestamp="$(ghidra_re_timestamp)"
+log_file="$log_dir/bug-hunt-${timestamp}.log"
+script_log="$log_dir/bug-hunt-${timestamp}.script.log"
+script_path="$(ghidra_re_script_path)"
+
+entrypoints_output="$export_dir/entrypoints.json"
+sinks_output="$export_dir/sinks.json"
+candidate_output="$export_dir/candidate_paths.json"
+summary_output="$export_dir/summary.md"
+
+mkdir -p "$export_dir" "$log_dir"
+
+optional_args=()
+while IFS= read -r -d '' item; do
+  optional_args+=("$item")
+done < <(ghidra_re_optional_headless_args)
+
+analysis_args=()
+case "${GHIDRA_BUG_HUNT_ANALYZE:-0}" in
+  1|true|yes|on)
+    ;;
+  0|false|no|off|"")
+    analysis_args=(-noanalysis)
+    ;;
+  *)
+    ghidra_re_die "unsupported GHIDRA_BUG_HUNT_ANALYZE: ${GHIDRA_BUG_HUNT_ANALYZE}"
+    ;;
+esac
+
+cmd=(
+  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$(ghidra_re_project_location "$project_name")"
+  "$project_name"
+  -process "$program_name"
+  -scriptPath "$script_path"
+)
+if [[ ${#analysis_args[@]} -gt 0 ]]; then
+  cmd+=("${analysis_args[@]}")
+fi
+if [[ ${#optional_args[@]} -gt 0 ]]; then
+  cmd+=("${optional_args[@]}")
+fi
+if ghidra_re_flag_enabled "${GHIDRA_BUG_HUNT_DEMANGLE:-1}"; then
+  cmd+=(-postScript DemangleAllScript.java)
+fi
+cmd+=(
+  -postScript ExportEntrypoints.java "manifest=${manifest_path}" "output=${entrypoints_output}"
+  -postScript ExportSinks.java "manifest=${manifest_path}" "output=${sinks_output}"
+  -postScript TriageBugPaths.java \
+    "manifest=${manifest_path}" \
+    "output=${candidate_output}" \
+    "summary=${summary_output}" \
+    "max_depth=${GHIDRA_BUG_HUNT_MAX_DEPTH:-4}" \
+    "max_visited_functions=${GHIDRA_BUG_HUNT_MAX_VISITED_FUNCTIONS:-1500}" \
+    "top_candidates=${GHIDRA_BUG_HUNT_TOP_CANDIDATES:-50}" \
+    "xref_limit=${GHIDRA_BUG_HUNT_XREF_LIMIT:-25}" \
+    "entrypoint_limit=${GHIDRA_BUG_HUNT_ENTRYPOINT_LIMIT:-40}" \
+  -log "$log_file"
+  -scriptlog "$script_log"
+)
+
+"${cmd[@]}"
+
+expected_files=(
+  "$entrypoints_output"
+  "$sinks_output"
+  "$candidate_output"
+  "$summary_output"
+)
+for output_path in "${expected_files[@]}"; do
+  [[ -f "$output_path" ]] || ghidra_re_die "expected bug-hunt file is missing: $output_path"
+done
+
+printf 'Exported bug-hunt bundle for %s/%s\n' "$project_name" "$program_name"
+printf 'Export dir: %s\n' "$export_dir"
+printf 'Files:\n'
+printf '  %s\n' "$entrypoints_output"
+printf '  %s\n' "$sinks_output"
+printf '  %s\n' "$candidate_output"
+printf '  %s\n' "$summary_output"
+printf 'Log: %s\n' "$log_file"
+printf 'Script log: %s\n' "$script_log"

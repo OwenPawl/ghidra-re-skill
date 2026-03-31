@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_apply_finding <project_name> <program_name> <key=value args...>
+Required:
+  - title=...
+  - comment=...
+  - function=... or address=...
+Optional:
+  - rename=...
+  - bookmark_category=...
+EOF
+}
+
+[[ $# -ge 5 ]] || {
+  usage >&2
+  exit 1
+}
+
+project_name="$1"
+program_name="$2"
+shift 2
+
+ghidra_re_require_tools
+ghidra_re_export_env
+ghidra_re_ensure_workspace
+ghidra_re_require_project "$project_name"
+
+normalized_args=()
+while IFS= read -r -d '' item; do
+  normalized_args+=("$item")
+done < <(ghidra_re_normalize_script_args "$@")
+
+title_value=""
+comment_value=""
+target_value=""
+target_kind=""
+for arg in "${normalized_args[@]}"; do
+  case "$arg" in
+    title=*)
+      title_value="${arg#title=}"
+      ;;
+    comment=*)
+      comment_value="${arg#comment=}"
+      ;;
+    function=*)
+      target_kind="function"
+      target_value="${arg#function=}"
+      ;;
+    address=*)
+      target_kind="address"
+      target_value="${arg#address=}"
+      ;;
+  esac
+done
+
+[[ -n "$title_value" ]] || ghidra_re_die "missing required finding argument: title=..."
+[[ -n "$comment_value" ]] || ghidra_re_die "missing required finding argument: comment=..."
+[[ -n "$target_kind" && -n "$target_value" ]] || \
+  ghidra_re_die "missing required finding target: function=... or address=..."
+
+slug="$(ghidra_re_sanitize_name "${title_value}_${target_value}")"
+finding_dir="$(ghidra_re_findings_dir "$project_name" "$program_name")/${slug}-$(ghidra_re_timestamp)"
+output_path="$finding_dir/finding_result.json"
+log_dir="$(ghidra_re_log_dir "$project_name")"
+timestamp="$(ghidra_re_timestamp)"
+log_file="$log_dir/finding-${slug}-${timestamp}.log"
+script_log="$log_dir/finding-${slug}-${timestamp}.script.log"
+script_path="$(ghidra_re_script_path)"
+
+mkdir -p "$finding_dir" "$log_dir"
+
+optional_args=()
+while IFS= read -r -d '' item; do
+  optional_args+=("$item")
+done < <(ghidra_re_optional_headless_args)
+
+cmd=(
+  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$(ghidra_re_project_location "$project_name")"
+  "$project_name"
+  -process "$program_name"
+  -scriptPath "$script_path"
+)
+if [[ "${GHIDRA_APPLY_FINDING_ANALYZE:-0}" != "1" ]]; then
+  cmd+=(-noanalysis)
+fi
+if [[ ${#optional_args[@]} -gt 0 ]]; then
+  cmd+=("${optional_args[@]}")
+fi
+cmd+=(
+  -postScript ApplyFinding.java
+)
+if [[ ${#normalized_args[@]} -gt 0 ]]; then
+  cmd+=("${normalized_args[@]}")
+fi
+cmd+=(
+  "output=${output_path}"
+  -log "$log_file"
+  -scriptlog "$script_log"
+)
+
+"${cmd[@]}"
+
+[[ -f "$output_path" ]] || ghidra_re_die "finding script reported success but output file is missing: $output_path"
+
+printf 'Applied finding for %s/%s\n' "$project_name" "$program_name"
+printf 'Result: %s\n' "$output_path"
+printf 'Log: %s\n' "$log_file"
+printf 'Script log: %s\n' "$script_log"

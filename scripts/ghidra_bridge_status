@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+ghidra_re_bridge_prune_stale_session
+
+if [[ ! -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]]; then
+  printf 'Bridge: disarmed\n'
+  exit 0
+fi
+
+if ghidra_re_bridge_session_healthy; then
+  "$SCRIPT_DIR/ghidra_bridge_call" /session '{}'
+  exit 0
+fi
+
+printf 'Bridge: stale session file at %s\n' "$GHIDRA_RE_BRIDGE_SESSION_FILE"
+cat "$GHIDRA_RE_BRIDGE_SESSION_FILE"
+exit 1

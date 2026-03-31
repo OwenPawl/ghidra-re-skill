@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_bridge_call <endpoint> [json_body|@json_file|-]
+EOF
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+endpoint="$1"
+if [[ $# -ge 2 ]]; then
+  body_arg="$2"
+else
+  body_arg='{}'
+fi
+body=""
+url=""
+token=""
+
+[[ "$endpoint" == /* ]] || endpoint="/$endpoint"
+ghidra_re_bridge_require_healthy_session
+
+case "$body_arg" in
+  @*)
+    [[ -f "${body_arg#@}" ]] || ghidra_re_die "JSON body file not found: ${body_arg#@}"
+    body="$(cat "${body_arg#@}")"
+    ;;
+  -)
+    body="$(cat)"
+    ;;
+  *)
+    body="$body_arg"
+    ;;
+esac
+
+url="$(ghidra_re_bridge_read_session_value bridge_url)"
+token="$(ghidra_re_bridge_read_session_value token)"
+[[ -n "$url" && -n "$token" ]] || ghidra_re_die "bridge session is missing bridge_url or token"
+
+curl -sS \
+  -X POST \
+  -H "Authorization: Bearer $token" \
+  -H 'Content-Type: application/json' \
+  --data-binary "$body" \
+  "$url$endpoint"
