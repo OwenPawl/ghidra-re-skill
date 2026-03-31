@@ -41,9 +41,12 @@ configured_ghidra="${GHIDRA_INSTALL_DIR:-}"
 configured_jdk="${GHIDRA_JDK:-}"
 detected_ghidra="$(ghidra_re_detect_ghidra_dir || true)"
 detected_jdk="$(ghidra_re_detect_jdk_dir || true)"
+python_cmd="$(ghidra_re_python || true)"
+bash_cmd="$(command -v bash || true)"
 
 printf 'ghidra-re doctor\n'
 printf 'Skill root: %s\n' "$GHIDRA_RE_ROOT"
+printf 'Platform: %s\n' "$GHIDRA_RE_PLATFORM"
 printf 'User config: %s\n' "$GHIDRA_RE_USER_CONFIG"
 printf 'Skill-local config: %s\n' "$GHIDRA_RE_SKILL_CONFIG"
 printf '\n'
@@ -62,12 +65,16 @@ fi
 
 show_candidate "Detected Ghidra candidate" "$detected_ghidra"
 show_candidate "Detected JDK candidate" "$detected_jdk"
+show_candidate "Detected Python" "$python_cmd"
+show_candidate "Detected Bash" "$bash_cmd"
 
 for path in \
   "$GHIDRA_WORKSPACE" \
   "$GHIDRA_PROJECTS_DIR" \
   "$GHIDRA_EXPORTS_DIR" \
-  "$GHIDRA_LOGS_DIR"
+  "$GHIDRA_LOGS_DIR" \
+  "$GHIDRA_INVESTIGATIONS_DIR" \
+  "$GHIDRA_SOURCES_CACHE_DIR"
 do
   if [[ -d "$path" ]]; then
     record_ok "Directory exists" "$path"
@@ -138,6 +145,12 @@ if [[ -f "$GHIDRA_RE_BUG_HUNT_MANIFEST" ]]; then
   record_ok "Bug-hunt manifest" "$GHIDRA_RE_BUG_HUNT_MANIFEST"
 else
   record_warn "Bug-hunt manifest" "$GHIDRA_RE_BUG_HUNT_MANIFEST"
+fi
+
+if [[ -f "$GHIDRA_RE_SOURCE_REGISTRY_FILE" ]]; then
+  record_ok "Source registry" "$GHIDRA_RE_SOURCE_REGISTRY_FILE"
+else
+  show_candidate "Source registry" "$GHIDRA_RE_SOURCE_REGISTRY_FILE"
 fi
 
 printf '\n'

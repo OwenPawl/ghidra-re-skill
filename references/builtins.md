@@ -2,11 +2,11 @@
 
 The wrappers include these built-in script directories in `-scriptPath`:
 
-- `/Applications/Ghidra/Ghidra/Features/Base/ghidra_scripts`
-- `/Applications/Ghidra/Ghidra/Features/Decompiler/ghidra_scripts`
-- `/Applications/Ghidra/Ghidra/Features/PyGhidra/ghidra_scripts`
-- `/Applications/Ghidra/Ghidra/Features/SwiftDemangler/ghidra_scripts`
-- `/Applications/Ghidra/Ghidra/Features/Jython/ghidra_scripts`
+- `$GHIDRA_INSTALL_DIR/Ghidra/Features/Base/ghidra_scripts`
+- `$GHIDRA_INSTALL_DIR/Ghidra/Features/Decompiler/ghidra_scripts`
+- `$GHIDRA_INSTALL_DIR/Ghidra/Features/PyGhidra/ghidra_scripts`
+- `$GHIDRA_INSTALL_DIR/Ghidra/Features/SwiftDemangler/ghidra_scripts`
+- `$GHIDRA_INSTALL_DIR/Ghidra/Features/Jython/ghidra_scripts`
 
 ## Recommended built-in
 

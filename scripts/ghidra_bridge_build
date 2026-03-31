@@ -11,7 +11,9 @@ ghidra_re_export_env
 [[ -d "$GHIDRA_RE_BRIDGE_EXTENSION_DIR" ]] || \
   ghidra_re_die "bridge extension directory not found at $GHIDRA_RE_BRIDGE_EXTENSION_DIR"
 
-"$GHIDRA_INSTALL_DIR/support/gradle/gradlew" \
+gradle_wrapper="$(ghidra_re_gradle_wrapper_path)"
+
+"$gradle_wrapper" \
   -p "$GHIDRA_RE_BRIDGE_EXTENSION_DIR" \
   -PGHIDRA_INSTALL_DIR="$GHIDRA_INSTALL_DIR" \
   clean \

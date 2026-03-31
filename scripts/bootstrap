@@ -73,15 +73,20 @@ run_bootstrap_smoke_test() {
   local tmp_root=""
   local project_root=""
   local project_name="bootstrap-smoke"
+  local analyze_headless=""
 
   [[ -x "$smoke_binary" ]] || smoke_binary="/bin/ls"
+  if ghidra_re_platform_is_windows; then
+    [[ -x "$smoke_binary" ]] || smoke_binary="/c/Windows/System32/where.exe"
+  fi
   [[ -x "$smoke_binary" ]] || ghidra_re_die "unable to find a small system binary for smoke testing"
+  analyze_headless="$(ghidra_re_analyze_headless_path "$ghidra_dir")"
 
   tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-re-bootstrap.XXXXXX")"
   project_root="$tmp_root/project"
   mkdir -p "$project_root"
   JAVA_HOME="$jdk_dir" PATH="$jdk_dir/bin:$PATH" \
-    "$ghidra_dir/support/analyzeHeadless" \
+    "$analyze_headless" \
     "$project_root" \
     "$project_name" \
     -import "$smoke_binary" \
@@ -113,7 +118,9 @@ workspace_root="${GHIDRA_WORKSPACE:-$HOME/ghidra-projects}"
 mkdir -p \
   "$workspace_root/projects" \
   "$workspace_root/exports" \
-  "$workspace_root/logs"
+  "$workspace_root/logs" \
+  "$workspace_root/investigations" \
+  "$workspace_root/sources"
 
 if [[ "$write_config" -eq 1 ]]; then
   write_config_file "$config_file" "$detected_ghidra_dir" "$detected_jdk_dir" "$workspace_root"

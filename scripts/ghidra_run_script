@@ -48,6 +48,7 @@ timestamp="$(ghidra_re_timestamp)"
 safe_script_name="$(ghidra_re_sanitize_name "$script_name")"
 log_file="$log_dir/script-${safe_script_name}-${timestamp}.log"
 script_log="$log_dir/script-${safe_script_name}-${timestamp}.script.log"
+analyze_headless="$(ghidra_re_analyze_headless_path)"
 
 optional_args=()
 while IFS= read -r -d '' item; do
@@ -79,7 +80,7 @@ case "${GHIDRA_RUN_SCRIPT_MODE:-readwrite}" in
 esac
 
 cmd=(
-  "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
+  "$analyze_headless"
   "$(ghidra_re_project_location "$project_name")"
   "$project_name"
   -process "$program_name"

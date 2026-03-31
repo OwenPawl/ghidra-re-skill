@@ -25,9 +25,13 @@ fi
 body=""
 url=""
 token=""
+session_file=""
+selector_values=""
+requested_session=""
+requested_project=""
+requested_program=""
 
 [[ "$endpoint" == /* ]] || endpoint="/$endpoint"
-ghidra_re_bridge_require_healthy_session
 
 case "$body_arg" in
   @*)
@@ -42,8 +46,14 @@ case "$body_arg" in
     ;;
 esac
 
-url="$(ghidra_re_bridge_read_session_value bridge_url)"
-token="$(ghidra_re_bridge_read_session_value token)"
+selector_values="$(ghidra_re_bridge_extract_selectors_from_json "$body")"
+IFS=$'\t' read -r requested_session requested_project requested_program <<<"$selector_values"
+session_file="$(ghidra_re_bridge_select_session "$requested_session" "$requested_project" "$requested_program")"
+ghidra_re_bridge_session_healthy_file "$session_file" || \
+  ghidra_re_die "bridge session at $session_file is stale or unreachable; arm or reopen that target"
+
+url="$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
+token="$(ghidra_re_bridge_read_value_from_file "$session_file" token)"
 [[ -n "$url" && -n "$token" ]] || ghidra_re_die "bridge session is missing bridge_url or token"
 
 curl -sS \

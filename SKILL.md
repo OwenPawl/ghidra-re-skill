@@ -5,14 +5,18 @@ description: Use for Ghidra-based reverse engineering on this machine, especiall
 
 # Ghidra RE
 
-Use this skill for repeatable, headless-first Ghidra work on macOS. It assumes:
+Use this skill for repeatable, headless-first Ghidra work on macOS or Windows. It assumes:
 
-- Ghidra install: `/Applications/Ghidra`
-- JDK: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+- Ghidra install:
+  - macOS: `/Applications/Ghidra`
+  - Windows: `/c/Program Files/Ghidra`
+- JDK:
+  - macOS: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+  - Windows: `/c/Program Files/Eclipse Adoptium/jdk-21`
 - Workspace root: `~/ghidra-projects`
 - Skill root: `~/.codex/skills/ghidra-re`
 
-V1 is optimized for Apple Mach-O reversing and dyld-extracted binaries. It now includes a localhost GUI bridge extension for live inspection, annotation, and controlled program surgery inside an open Ghidra session.
+V1 is optimized for Apple Mach-O reversing and dyld-extracted binaries. It now includes a localhost GUI bridge extension for live inspection, annotation, and controlled program surgery inside open Ghidra sessions, plus mission workspaces for multi-target investigation across frameworks, daemons, and helpers.
 
 The custom automation scripts ship as Java Ghidra scripts because that is the most reliable headless path on this machine.
 
@@ -20,24 +24,32 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 
 1. On a fresh machine, run `scripts/bootstrap` once.
 2. If bootstrap cannot find Ghidra or Java 21, run `scripts/doctor`.
-3. Import and analyze a target into a dedicated project:
-   - `scripts/ghidra_import_analyze <binary> [project_name]`
-4. Export the default Apple-focused bundle:
+3. On Windows, if the targets live in a mounted or extracted macOS image, register that source first:
+   - `scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache`
+4. Start a multi-target mission when the task spans more than one framework, daemon, or helper:
+   - `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
+5. Extend the mission with a seed-driven trace:
+   - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value>`
+6. Read the mission report:
+   - `scripts/ghidra_mission_report <mission_name>`
+7. For a single target, import and analyze into a dedicated project:
+   - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
+7. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-5. Export the bug-hunt bundle when you want entrypoint-to-sink triage:
+8. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
-6. Generate a function dossier for a top candidate:
+9. Generate a function dossier for a top candidate:
    - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
-7. Apply a finding back into the project when you confirm something interesting:
+10. Apply a finding back into the project when you confirm something interesting:
    - `scripts/ghidra_apply_finding <project_name> <program_name> function=... title=... comment=...`
-8. Run an extra script when needed:
+11. Run an extra script when needed:
    - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
-9. Append any friction or missing-feature notes to `references/use-case-driven-notes.md` before you wrap up the session.
-10. Open the project in the GUI:
+12. Append any friction or missing-feature notes to `references/use-case-driven-notes.md` before you wrap up the session.
+13. Open the project in the GUI:
    - `scripts/ghidra_open_gui <project_name> [program_name]`
-11. Arm the live bridge when you want an interactive RE loop:
-   - `scripts/ghidra_bridge_arm <project_name> [program_name]`
-12. Use the live bridge wrappers for inspection or edits:
+14. Arm or reuse the live bridge when you want an interactive RE loop:
+   - `scripts/ghidra_bridge_open <project_name> [program_name]`
+15. Use the live bridge wrappers for inspection or edits:
    - `scripts/ghidra_bridge_current_context`
    - `scripts/ghidra_bridge_analyze_target <query>`
    - `scripts/ghidra_bridge_decompile_current`
@@ -50,6 +62,8 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
    - `scripts/ghidra_bridge_patch_instruction ...`
 13. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
    - `scripts/build_mac_desktop_share_package [output_zip]`
+14. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
+   - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 
 ## Default Workflow
 
@@ -58,9 +72,22 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 - Projects live under `~/ghidra-projects/projects/<project_name>/`.
 - Exports live under `~/ghidra-projects/exports/<project_name>/<program_name>/`.
 - Logs live under `~/ghidra-projects/logs/<project_name>/`.
+- Multi-target investigation workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
+- Source-backed imports are cached under `~/ghidra-projects/sources/<source_name>/` by default when you use `source:name:/path`.
 - Prefer explicit project names for reusable work. If omitted, the import wrapper derives one from the binary basename.
 
-### 2) Use the Apple export bundle first
+### 2) Use missions for cross-target work
+- Prefer `scripts/ghidra_mission_start` whenever the question spans multiple frameworks, daemons, or XPC helpers.
+- Mission workspaces keep:
+  - `mission.json`
+  - `graph.sqlite`
+  - `exports/`
+  - `reports/latest.md`
+  - `reports/latest.json`
+- Mission runs are notes-only by default. They do not rename symbols, comment programs, or patch bytes unless you explicitly call the existing write wrappers outside the mission flow.
+- `scripts/ghidra_mission_trace` uses the investigation graph first, then live bridge helpers like `functions/search`, `analyze/target`, and `selector-trace`.
+
+### 3) Use the Apple export bundle first
 - Run `scripts/ghidra_export_apple_bundle` after import unless the user only wants a narrow script run.
 - The bundle runs `DemangleAllScript.java` and then exports:
   - `program_summary.json`
@@ -70,7 +97,7 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
   - `strings.json`
 - Set `GHIDRA_EXPORT_DEMANGLE=0` when you want a faster or quieter export pass without the blanket demangle step.
 
-### 3) Use targeted scripts for follow-up
+### 4) Use targeted scripts for follow-up
 - Run `scripts/ghidra_export_bug_hunt_bundle` when the task is bug hunting, boundary analysis, or userland trust-boundary triage.
 - Use `scripts/ghidra_function_dossier` on the top-ranked candidate paths before decompiling functions ad hoc.
 - Use `scripts/ghidra_apply_finding` only when you want to write comments, bookmarks, or renames back into the project.
@@ -79,15 +106,19 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 - `ExportXrefs.java` for targeted xref tracing
 - `ExportAppleBundle.java` when you want the full structured export outside the convenience wrapper
 
-### 4) Use the live bridge for iterative GUI sessions
+### 5) Use the live bridge for iterative GUI sessions
 - Prefer the live bridge whenever the target is already open or the task will involve repeated `search -> navigate -> decompile -> refs` loops.
 - Prefer headless exports for wide scans, batch bundles, or cold-start project setup; switch to the bridge once you want a tighter interactive loop.
 - `scripts/bootstrap` installs the bridge extension into the user's Ghidra settings when possible.
 - If Ghidra was already running before the install, restart it once or run `EnableCodexBridge.java` from the GUI Script Manager.
-- `scripts/ghidra_bridge_arm` writes `~/.config/ghidra-re/bridge-control.json`, first gives an already-running Ghidra session a chance to consume it, and only then launches a detached GUI session if needed.
+- The bridge now keeps a real multi-session registry under `~/.config/ghidra-re/bridge-sessions/` and a compatibility pointer at `~/.config/ghidra-re/bridge-current.json`.
+- `scripts/ghidra_bridge_open` and `scripts/ghidra_bridge_arm` write per-request files under `~/.config/ghidra-re/bridge-requests/`, first give an already-running Ghidra session a chance to consume them, and only then launch a detached GUI session if needed.
+- Use `scripts/ghidra_bridge_sessions` to list live sessions and `scripts/ghidra_bridge_select` to change the default target.
 - On macOS, detached launches use a hidden `screen` keeper session so Ghidra survives after the launcher command exits and the bridge remains usable across the rest of the Codex session.
-- Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` arm request while a newly launched WorkflowKit instance consumes the same control file and becomes the active bridge session.
+- Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.
 - `scripts/ghidra_bridge_call` is the raw HTTP wrapper; prefer the convenience wrappers for common tasks.
+- Most live bridge wrappers accept optional `session=<id>`, `project=<name>`, or `program=<name>` selectors.
+- Prefer `project=` or `session=` when duplicate live targets share the same `program_name`.
 - Mutating bridge calls require `write=true`; destructive bridge calls also require `destructive=true`.
 
 ## Command Surface
@@ -104,7 +135,11 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_bridge_build`
 - `scripts/ghidra_bridge_install`
 - `scripts/ghidra_bridge_arm <project_name> [program_name]`
+- `scripts/ghidra_bridge_open <project_name> [program_name]`
+- `scripts/ghidra_bridge_close [session=<id>|project=<name>|program=<name>]`
 - `scripts/ghidra_bridge_disarm`
+- `scripts/ghidra_bridge_sessions`
+- `scripts/ghidra_bridge_select session=<id>|project=<name>|program=<name>`
 - `scripts/ghidra_bridge_status`
 - `scripts/ghidra_bridge_call <endpoint> [json_body]`
 - `scripts/ghidra_bridge_current_context`
@@ -125,10 +160,18 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_bridge_delete_function <function_or_address>`
 - `scripts/ghidra_bridge_create_data <address> <datatype>`
 - `scripts/ghidra_bridge_delete_data <address> [end]`
+- `scripts/ghidra_source_add <name> root=<path> [platform=macos-image] [copy=cache|direct]`
+- `scripts/ghidra_source_list`
+- `scripts/ghidra_source_resolve <name> </path/in/image> [copy=cache|direct]`
+- `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
+- `scripts/ghidra_mission_status <mission_name>`
+- `scripts/ghidra_mission_trace <mission_name> seed=<kind:value> [target=project:program]`
+- `scripts/ghidra_mission_report <mission_name> [format=markdown|json|path]`
 - `scripts/bootstrap [--skip-smoke-test]`
 - `scripts/doctor`
 - `scripts/build_share_package [output_zip]`
 - `scripts/build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]`
+- `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 
 ### Script argument style
 - Prefer `key=value` arguments because they are robust under `analyzeHeadless`.

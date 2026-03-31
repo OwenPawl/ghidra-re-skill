@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+ghidra_re_bridge_prune_stale_sessions
+current_session_file="$(ghidra_re_bridge_current_session_file || true)"
+
+session_files=()
+while IFS= read -r session_file; do
+  [[ -z "$session_file" ]] && continue
+  session_files+=("$session_file")
+done < <(ghidra_re_bridge_session_files)
+
+if [[ ${#session_files[@]} -eq 0 ]]; then
+  printf '[]\n'
+  exit 0
+fi
+
+python3 - "$current_session_file" "${session_files[@]}" <<'PY'
+import json
+import pathlib
+import sys
+
+current = sys.argv[1]
+files = sys.argv[2:]
+sessions = []
+for path in files:
+    p = pathlib.Path(path)
+    try:
+        data = json.loads(p.read_text())
+    except Exception:
+        continue
+    data["session_file"] = str(p)
+    data["current"] = str(p) == current
+    sessions.append(data)
+
+def sort_key(item):
+    return (
+        item.get("last_heartbeat", ""),
+        item.get("project_name", ""),
+        item.get("program_name", ""),
+    )
+
+sessions.sort(key=sort_key, reverse=True)
+print(json.dumps(sessions, indent=2))
+PY

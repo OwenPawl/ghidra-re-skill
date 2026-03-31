@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_patch_instruction <address> <assembly>
+Usage: ghidra_bridge_patch_instruction <address> <assembly> [key=value ...]
 EOF
 }
 
@@ -18,6 +18,11 @@ EOF
 
 address="$1"
 shift
+extra_args=()
+while [[ $# -gt 0 && "${!#}" == *=* ]]; do
+  extra_args=("${!#}" "${extra_args[@]}")
+  set -- "${@:1:$(($#-1))}"
+done
 assembly="$*"
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$address" assembly="$assembly")"
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true address="$address" assembly="$assembly" "${extra_args[@]}")"
 "$SCRIPT_DIR/ghidra_bridge_call" /patch/instruction "$body"

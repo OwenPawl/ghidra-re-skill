@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_bridge_clear_listing <start> [end] [mode]
+Usage: ghidra_bridge_clear_listing <start> [end] [mode] [key=value ...]
 Modes:
   all
   code
@@ -15,13 +15,22 @@ Modes:
 EOF
 }
 
-[[ $# -ge 1 && $# -le 3 ]] || {
+[[ $# -ge 1 ]] || {
   usage >&2
   exit 1
 }
 
 start="$1"
-end="${2:-$1}"
-mode="${3:-all}"
-body="$(ghidra_re_bridge_json_from_kv write=true destructive=true start="$start" end="$end" mode="$mode")"
+shift
+end="$start"
+mode="all"
+if [[ $# -gt 0 && "$1" != *=* ]]; then
+  end="$1"
+  shift
+fi
+if [[ $# -gt 0 && "$1" != *=* ]]; then
+  mode="$1"
+  shift
+fi
+body="$(ghidra_re_bridge_json_from_kv write=true destructive=true start="$start" end="$end" mode="$mode" "$@")"
 "$SCRIPT_DIR/ghidra_bridge_call" /listing/clear "$body"

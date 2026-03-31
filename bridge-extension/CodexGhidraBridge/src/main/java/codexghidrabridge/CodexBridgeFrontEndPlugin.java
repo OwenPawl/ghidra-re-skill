@@ -11,6 +11,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Comparator;
 
 import javax.swing.Timer;
 
@@ -43,7 +45,8 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 
 	private static final long OPEN_RETRY_INTERVAL_MS = 5000L;
 
-	private final File controlFile;
+	private final File requestsDir;
+	private final File legacyControlFile;
 	private Timer controlTimer;
 	private String lastOpenRequestKey = "";
 	private long lastOpenAttemptAt = 0L;
@@ -51,7 +54,8 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 	public CodexBridgeFrontEndPlugin(PluginTool tool) {
 		super(tool);
 		File configDir = new File(new File(System.getProperty("user.home"), ".config"), "ghidra-re");
-		this.controlFile = new File(configDir, "bridge-control.json");
+		this.requestsDir = new File(configDir, "bridge-requests");
+		this.legacyControlFile = new File(configDir, "bridge-control.json");
 	}
 
 	@Override
@@ -60,7 +64,7 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 		if (controlTimer != null) {
 			return;
 		}
-		controlTimer = new Timer(1000, event -> pollControlFile());
+		controlTimer = new Timer(1000, event -> pollControlRequests());
 		controlTimer.setRepeats(true);
 		controlTimer.start();
 		Msg.info(this, "Codex front-end bridge helper ready");
@@ -75,18 +79,21 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 		super.dispose();
 	}
 
-	private void pollControlFile() {
+	private void pollControlRequests() {
 		try {
-			if (!controlFile.exists()) {
+			pollLegacyControlFile();
+			if (!requestsDir.exists()) {
 				return;
 			}
-			JsonObject request = readJsonObject(controlFile);
-			String command = optString(request, "command");
-			if (!"arm".equalsIgnoreCase(command)) {
+			File[] requestFiles =
+				requestsDir.listFiles((dir, name) -> name != null && name.endsWith(".json"));
+			if (requestFiles == null || requestFiles.length == 0) {
 				return;
 			}
-
-			handleArmRequest(request);
+			Arrays.sort(requestFiles, Comparator.comparing(File::getName));
+			for (File requestFile : requestFiles) {
+				processRequestFile(requestFile);
+			}
 		}
 		catch (Exception e) {
 			Msg.warn(this, "Codex front-end bridge helper will retry control file: " +
@@ -94,24 +101,55 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 		}
 	}
 
-	private void handleArmRequest(JsonObject request) {
+	private void pollLegacyControlFile() throws IOException {
+		if (!legacyControlFile.exists()) {
+			return;
+		}
+		JsonObject request = readJsonObject(legacyControlFile);
+		if (processRequest(request)) {
+			legacyControlFile.delete();
+		}
+	}
+
+	private void processRequestFile(File requestFile) {
+		try {
+			JsonObject request = readJsonObject(requestFile);
+			if (processRequest(request)) {
+				requestFile.delete();
+			}
+		}
+		catch (Exception e) {
+			Msg.warn(this, "Codex front-end helper will retry request file " +
+				requestFile.getName() + ": " + e.getMessage());
+		}
+	}
+
+	private boolean processRequest(JsonObject request) {
+		String command = optString(request, "command");
+		if (!"arm".equalsIgnoreCase(command)) {
+			return false;
+		}
+		return handleArmRequest(request);
+	}
+
+	private boolean handleArmRequest(JsonObject request) {
 		Project project = tool.getProject();
 		if (project == null) {
 			Msg.info(this, "Codex front-end helper saw arm request before project was available");
-			return;
+			return false;
 		}
 
 		String requestedProject = optString(request, "project_name");
 		if (!requestedProject.isEmpty() && !requestedProject.equals(project.getName())) {
 			Msg.info(this, "Codex front-end helper ignoring arm request for project " + requestedProject +
 				" while " + project.getName() + " is active");
-			return;
+			return false;
 		}
 
 		String requestedProgram = optString(request, "program_name");
 		if (requestedProgram.isEmpty()) {
 			Msg.info(this, "Codex front-end helper saw arm request without a program name");
-			return;
+			return false;
 		}
 
 		Msg.info(this, "Codex front-end helper processing arm request for " + requestedProgram +
@@ -123,7 +161,7 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 				" for " + requestedProgram);
 			CodexBridgePlugin bridgePlugin = ensureBridgePlugin(runningTool);
 			if (bridgePlugin == null) {
-				return;
+				return false;
 			}
 			if (!bridgePlugin.isBridgeArmed()) {
 				try {
@@ -131,7 +169,7 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 				}
 				catch (IOException e) {
 					Msg.error(this, "Codex front-end helper could not arm bridge plugin", e);
-					return;
+					return false;
 				}
 			}
 			if (bridgePlugin.isBridgeArmed()) {
@@ -139,31 +177,32 @@ public class CodexBridgeFrontEndPlugin extends Plugin implements ApplicationLeve
 					runningTool.getToolName());
 				lastOpenRequestKey = "";
 				lastOpenAttemptAt = 0L;
-				controlFile.delete();
+				return true;
 			}
-			return;
+			return false;
 		}
 
 		DomainFile domainFile = resolveDomainFile(project, requestedProgram);
 		if (domainFile == null) {
 			Msg.error(this, "Codex front-end helper could not resolve program " + requestedProgram +
 				" in project " + project.getName(), null);
-			return;
+			return false;
 		}
 
 		FrontEndPlugin frontEndPlugin = findFrontEndPlugin();
 		if (frontEndPlugin == null) {
 			Msg.error(this, "Codex front-end helper could not find FrontEndPlugin", null);
-			return;
+			return false;
 		}
 
 		if (shouldSkipOpenAttempt(requestedProject, requestedProgram)) {
-			return;
+			return false;
 		}
 
 		Msg.info(this, "Codex front-end helper opening " + domainFile.getPathname());
 		recordOpenAttempt(requestedProject, requestedProgram);
 		frontEndPlugin.openDomainFile(domainFile);
+		return false;
 	}
 
 	private void recordOpenAttempt(String requestedProject, String requestedProgram) {

@@ -23,9 +23,18 @@ project_file="$(ghidra_re_project_file "$project_name")"
 ghidra_re_require_tools
 ghidra_re_export_env
 ghidra_re_require_project "$project_name"
+ghidra_re_bridge_prune_stale_sessions
 
-if ghidra_re_ghidra_running && [[ -f "$GHIDRA_RE_BRIDGE_SESSION_FILE" ]] && \
-   ! ghidra_re_bridge_session_matches_project "$project_name"; then
+session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" 2>/dev/null || true)"
+if [[ -n "$session_file" ]] && ghidra_re_bridge_session_healthy_file "$session_file"; then
+  ghidra_re_bridge_write_current_from_session_file "$session_file"
+  printf 'Reused live session: %s\n' "$session_file"
+  exit 0
+fi
+
+current_session_file="$(ghidra_re_bridge_current_session_file || true)"
+if ghidra_re_ghidra_running && [[ -n "$current_session_file" ]] && \
+   ! ghidra_re_bridge_session_matches_file "$current_session_file" "" "$project_name" ""; then
   ghidra_re_launch_gui_project "$project_file" new-instance
 else
   ghidra_re_launch_gui_project "$project_file"

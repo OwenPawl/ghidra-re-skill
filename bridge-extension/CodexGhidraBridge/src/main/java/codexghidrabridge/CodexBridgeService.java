@@ -150,31 +150,35 @@ class CodexBridgeService {
 	private final CodexBridgePlugin plugin;
 	private final CodexBridgeProvider provider;
 	private final File configDir;
-	private final File sessionFile;
-	private final File controlFile;
+	private final File sessionsDir;
+	private final File requestsDir;
+	private final File legacyControlFile;
 
 	private HttpServer server;
 	private ExecutorService executor;
 	private Timer controlTimer;
 	private boolean armed;
+	private final String sessionId;
 	private String bridgeUrl = "";
 	private String token = "";
 	private String startedAt = "";
-	private long lastControlMtime = -1L;
+	private long lastHeartbeatMillis = 0L;
 
 	CodexBridgeService(CodexBridgePlugin plugin, CodexBridgeProvider provider) {
 		this.plugin = plugin;
 		this.provider = provider;
 		this.configDir = new File(new File(System.getProperty("user.home"), ".config"), "ghidra-re");
-		this.sessionFile = new File(configDir, "bridge-session.json");
-		this.controlFile = new File(configDir, "bridge-control.json");
+		this.sessionsDir = new File(configDir, "bridge-sessions");
+		this.requestsDir = new File(configDir, "bridge-requests");
+		this.legacyControlFile = new File(configDir, "bridge-control.json");
+		this.sessionId = UUID.randomUUID().toString();
 	}
 
 	void start() {
 		if (controlTimer != null) {
 			return;
 		}
-		controlTimer = new Timer(1000, event -> pollControlFile());
+		controlTimer = new Timer(1000, event -> pollControlRequests());
 		controlTimer.setRepeats(true);
 		controlTimer.start();
 	}
@@ -203,6 +207,7 @@ class CodexBridgeService {
 		token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
 		bridgeUrl = "http://127.0.0.1:" + server.getAddress().getPort();
 		startedAt = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
+		lastHeartbeatMillis = System.currentTimeMillis();
 		writeSessionFile();
 		log("bridge armed (" + reason + ") at " + bridgeUrl);
 	}
@@ -223,6 +228,8 @@ class CodexBridgeService {
 		bridgeUrl = "";
 		token = "";
 		startedAt = "";
+		lastHeartbeatMillis = 0L;
+		File sessionFile = sessionFile();
 		if (sessionFile.exists()) {
 			sessionFile.delete();
 		}
@@ -242,7 +249,7 @@ class CodexBridgeService {
 
 	void onProgramActivated(Program program) {
 		updateSessionIfArmed();
-		pollControlFile();
+		pollControlRequests();
 	}
 
 	void onProgramDeactivated(Program program) {
@@ -331,6 +338,12 @@ class CodexBridgeService {
 		if (!configDir.exists() && !configDir.mkdirs()) {
 			throw new IOException("failed to create " + configDir);
 		}
+		if (!sessionsDir.exists() && !sessionsDir.mkdirs()) {
+			throw new IOException("failed to create " + sessionsDir);
+		}
+		if (!requestsDir.exists() && !requestsDir.mkdirs()) {
+			throw new IOException("failed to create " + requestsDir);
+		}
 	}
 
 	private void updateSessionIfArmed() {
@@ -347,16 +360,20 @@ class CodexBridgeService {
 
 	private void writeSessionFile() throws IOException {
 		ensureConfigDir();
+		RepositoryState repository = repositoryStateFor(plugin.getCurrentProgram());
 		JsonObject session = new JsonObject();
 		session.addProperty("version", 1);
+		session.addProperty("session_id", sessionId);
 		session.addProperty("bridge_url", bridgeUrl);
 		session.addProperty("token", token);
 		session.addProperty("pid", ProcessHandle.current().pid());
 		session.addProperty("tool_name", plugin.getTool().getToolName());
-		RepositoryState repository = repositoryStateFor(plugin.getCurrentProgram());
+		session.addProperty("project_name", repository.projectName);
 		session.addProperty("project_path", repository.projectMarkerPath);
+		session.addProperty("program_name", repository.programName);
 		session.addProperty("program_path", repository.domainPath);
 		session.addProperty("started_at", startedAt);
+		session.addProperty("last_heartbeat", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
 		session.addProperty("armed", armed);
 		JsonArray capabilities = new JsonArray();
 		for (String capability : CAPABILITIES) {
@@ -364,41 +381,90 @@ class CodexBridgeService {
 		}
 		session.add("capabilities", capabilities);
 		session.add("repository", repositoryToJson(repository));
-		writeJson(sessionFile, session);
+		writeJson(sessionFile(), session);
 	}
 
-	private void pollControlFile() {
+	private File sessionFile() {
+		return new File(sessionsDir, sessionId + ".json");
+	}
+
+	private void pollLegacyControlFile() throws Exception {
+		if (!legacyControlFile.exists()) {
+			return;
+		}
+		JsonObject request = readJsonObject(legacyControlFile);
+		if (requestMatches(request)) {
+			processRequest(request, "legacy-control");
+			legacyControlFile.delete();
+		}
+	}
+
+	private void processRequestFile(File requestFile) throws Exception {
+		JsonObject request = readJsonObject(requestFile);
+		if (!requestMatches(request)) {
+			return;
+		}
+		processRequest(request, requestFile.getName());
+		requestFile.delete();
+	}
+
+	private void processRequest(JsonObject request, String source) throws Exception {
+		String command = optString(request, "command");
+		if (command.isEmpty()) {
+			return;
+		}
+		if ("arm".equalsIgnoreCase(command)) {
+			arm("request:" + source);
+			return;
+		}
+		if ("disarm".equalsIgnoreCase(command)) {
+			disarm("request:" + source);
+		}
+	}
+
+	private boolean requestMatches(JsonObject request) {
+		String requestedSession = optString(request, "session_id");
+		String requestedProject = optString(request, "project_name");
+		String requestedProgram = optString(request, "program_name");
+		if (!requestedSession.isEmpty() && !sessionId.equals(requestedSession)) {
+			return false;
+		}
+		String activeProject = activeProjectName();
+		if (!requestedProject.isEmpty() && !requestedProject.equals(activeProject)) {
+			return false;
+		}
+		if (requestedProgram.isEmpty()) {
+			return true;
+		}
+		Program program = plugin.getCurrentProgram();
+		if (program == null) {
+			return !requestedProject.isEmpty() && requestedProject.equals(activeProject);
+		}
+		String activeProgramName = program.getName();
+		String activeProgramPath = programPath(program);
+		return requestedProgram.equals(activeProgramName) ||
+			requestedProgram.equals(activeProgramPath) ||
+			activeProgramPath.endsWith("/" + requestedProgram);
+	}
+
+	private void pollControlRequests() {
 		try {
-			if (!controlFile.exists()) {
-				lastControlMtime = -1L;
-				return;
-			}
-			long currentMtime = controlFile.lastModified();
-			if (currentMtime == lastControlMtime) {
-				return;
-			}
-			JsonObject request = readJsonObject(controlFile);
-			lastControlMtime = currentMtime;
-			String command = optString(request, "command");
-			if ("arm".equalsIgnoreCase(command)) {
-				String requestedProject = optString(request, "project_name");
-				String activeProject = activeProjectName();
-				if (!requestedProject.isEmpty() && !activeProject.isEmpty() &&
-					!requestedProject.equals(activeProject)) {
-					log("ignoring arm request for project " + requestedProject + " while " +
-						activeProject + " is active");
-					return;
+			pollLegacyControlFile();
+			File[] requestFiles =
+				requestsDir.listFiles((dir, name) -> name != null && name.endsWith(".json"));
+			if (requestFiles != null) {
+				Arrays.sort(requestFiles, Comparator.comparing(File::getName));
+				for (File requestFile : requestFiles) {
+					processRequestFile(requestFile);
 				}
-				arm("control");
-				controlFile.delete();
 			}
-			else if ("disarm".equalsIgnoreCase(command)) {
-				disarm("control");
-				controlFile.delete();
+			if (armed && (System.currentTimeMillis() - lastHeartbeatMillis) >= 1000L) {
+				lastHeartbeatMillis = System.currentTimeMillis();
+				writeSessionFile();
 			}
 		}
 		catch (Exception e) {
-			log("control file error: " + e.getMessage());
+			log("request processing error: " + e.getMessage());
 		}
 	}
 
@@ -512,6 +578,7 @@ class CodexBridgeService {
 	private JsonElement handleSession() {
 		JsonObject result = new JsonObject();
 		result.addProperty("armed", armed);
+		result.addProperty("session_id", sessionId);
 		result.addProperty("bridge_url", bridgeUrl);
 		result.addProperty("tool_name", plugin.getTool().getToolName());
 		result.addProperty("started_at", startedAt);
