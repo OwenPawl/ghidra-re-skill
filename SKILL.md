@@ -19,6 +19,7 @@ Use this skill for repeatable, headless-first Ghidra work on macOS or Windows. I
 V1 is optimized for Apple Mach-O reversing and dyld-extracted binaries. It now includes a localhost GUI bridge extension for live inspection, annotation, and controlled program surgery inside open Ghidra sessions, plus mission workspaces for multi-target investigation across frameworks, daemons, and helpers.
 
 The custom automation scripts ship as Java Ghidra scripts because that is the most reliable headless path on this machine.
+On Windows, the public repo now also ships a native PowerShell wrapper layer in `powershell/` for people who want first-class PowerShell commands instead of starting in Git Bash.
 
 ## Quick Start
 
@@ -64,6 +65,10 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
    - `scripts/build_mac_desktop_share_package [output_zip]`
 14. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
    - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
+15. On Windows, optionally import the native module after install:
+   - `Import-Module GhidraRe`
+   - `Get-GhidraReBridgeSessions`
+   - `Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/.../WorkflowKit'`
 
 ## Default Workflow
 
@@ -75,6 +80,7 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 - Multi-target investigation workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
 - Source-backed imports are cached under `~/ghidra-projects/sources/<source_name>/` by default when you use `source:name:/path`.
 - Prefer explicit project names for reusable work. If omitted, the import wrapper derives one from the binary basename.
+- On Windows, the PowerShell module resolves the installed skill root automatically from `CODEX_HOME` or `~/.codex/skills/ghidra-re`, then forwards to the same script surface.
 
 ### 2) Use missions for cross-target work
 - Prefer `scripts/ghidra_mission_start` whenever the question spans multiple frameworks, daemons, or XPC helpers.
@@ -120,6 +126,7 @@ The custom automation scripts ship as Java Ghidra scripts because that is the mo
 - Most live bridge wrappers accept optional `session=<id>`, `project=<name>`, or `program=<name>` selectors.
 - Prefer `project=` or `session=` when duplicate live targets share the same `program_name`.
 - Mutating bridge calls require `write=true`; destructive bridge calls also require `destructive=true`.
+- The PowerShell module mirrors the most common source, mission, and bridge commands with `Verb-GhidraRe*` functions for Windows-first usage.
 
 ## Command Surface
 
@@ -172,6 +179,7 @@ Run these wrappers from the skill directory:
 - `scripts/build_share_package [output_zip]`
 - `scripts/build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]`
 - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
+- `powershell/GhidraRe.psd1` and `powershell/GhidraRe.psm1` for native Windows PowerShell wrappers
 
 ### Script argument style
 - Prefer `key=value` arguments because they are robust under `analyzeHeadless`.
