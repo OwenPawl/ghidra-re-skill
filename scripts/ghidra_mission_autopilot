@@ -85,6 +85,7 @@ suggestions = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")).
 round_index = int(sys.argv[3])
 explicit = sys.argv[4:]
 visited = set(state.get("visited_seeds", []))
+visited_targets = set(state.get("visited_targets", []))
 
 def infer_seed(raw):
     raw = (raw or "").strip()
@@ -102,6 +103,18 @@ def infer_seed(raw):
         return {"seed": f"selector:{raw}", "kind": "selector", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
     return {"seed": f"function:{raw}", "kind": "function", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
 
+def rank(item):
+    score = float(item.get("score", 0.0))
+    reasons = item.get("reasons", [])
+    preferred_targets = item.get("preferred_targets", []) or []
+    if preferred_targets and any(target not in visited_targets for target in preferred_targets):
+        score += 8.0
+    if any("configured" in reason for reason in reasons):
+        score += 5.0
+    if any("hypothesis" in reason for reason in reasons):
+        score += 4.0
+    return score
+
 candidate = None
 for item in explicit:
     parsed = infer_seed(item)
@@ -110,7 +123,7 @@ for item in explicit:
         break
 
 if candidate is None:
-    for item in suggestions:
+    for item in sorted(suggestions, key=lambda item: (-rank(item), item.get("kind", ""), item.get("value", ""))):
         if item.get("seed") and item["seed"] not in visited:
             candidate = item
             break
@@ -145,6 +158,13 @@ reasons = payload["selected"].get("reasons", [])
 print(reasons[0] if reasons else "")
 PY
 )"
+  selected_targets="$(python3 - "$selection_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+targets = payload["selected"].get("preferred_targets", []) or []
+print("\n".join(targets))
+PY
+)"
 
   round_slug="$(ghidra_re_sanitize_name "$selected_seed")"
   round_dir="$autopilot_dir/round-$(printf '%02d' "$round")-$round_slug"
@@ -155,6 +175,11 @@ PY
     for target_filter in "${target_filters[@]}"; do
       trace_args+=("target=$target_filter")
     done
+  elif [[ -n "$selected_targets" ]]; then
+    while IFS= read -r preferred_target; do
+      [[ -n "$preferred_target" ]] || continue
+      trace_args+=("target=$preferred_target")
+    done <<<"$selected_targets"
   fi
 
   "$SCRIPT_DIR/ghidra_mission_trace" "${trace_args[@]}" >"$round_dir/trace.log"
@@ -199,6 +224,9 @@ for candidate in (
 references_payload = snapshot.get("references", {})
 references_result = references_payload.get("result", {}) if isinstance(references_payload, dict) else {}
 next_hops = []
+for item in snapshot.get("interesting_next_hops", []):
+    if item and item not in next_hops:
+        next_hops.append(item)
 for bucket in ("callees", "callers"):
     for item in references_result.get(bucket, []):
         name = item.get("name", "")
@@ -216,6 +244,8 @@ payload = {
     "target_key": f"{repository.get('project_name','')}:{repository.get('program_name','')}" if repository.get("project_name") and repository.get("program_name") else "",
     "function_name": function_name,
     "next_hops": next_hops[:8],
+    "interesting_next_hops": snapshot.get("interesting_next_hops", [])[:8],
+    "resolved_from_address": bool(snapshot.get("resolved_from_address")),
 }
 print(json.dumps(payload, indent=2))
 PY
@@ -279,10 +309,20 @@ round_dir = sys.argv[3]
 reason = sys.argv[4]
 state = json.loads(state_path.read_text(encoding="utf-8"))
 visited = state.setdefault("visited_seeds", [])
+visited_targets = state.setdefault("visited_targets", [])
 rounds = state.setdefault("rounds", [])
 if seed not in visited:
     visited.append(seed)
-rounds.append({"seed": seed, "round_dir": round_dir, "reason": reason})
+target_key = ""
+summary_path = pathlib.Path(round_dir) / "snapshot-summary.json"
+if summary_path.exists():
+    try:
+        target_key = json.loads(summary_path.read_text(encoding="utf-8")).get("target_key", "")
+    except Exception:
+        target_key = ""
+if target_key and target_key not in visited_targets:
+    visited_targets.append(target_key)
+rounds.append({"seed": seed, "round_dir": round_dir, "reason": reason, "target_key": target_key})
 state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 PY
 

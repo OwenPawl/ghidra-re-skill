@@ -29,5 +29,11 @@ This file captures friction, missing features, and quality-of-life improvements 
 ## 2026-03-31 - Autopilot And Bridge Snapshots
 
 - `ghidra_mission_autopilot` is already useful when a mission has a decent graph and a few meaningful next hops. On `elite_pilot_smoke`, one round was enough to pick a real WorkflowKit function seed, navigate there live, capture a bridge snapshot artifact, and update the mission hypothesis automatically.
-- `ghidra_bridge_snapshot` currently mirrors the live UI faithfully: if the current location is only an address and not a resolvable function, the function and decompile sections are empty. A future version should resolve the containing function from the current address so snapshots are richer even when the UI is not already parked on a clean function entry.
 - Autopilot-derived next hops can drift back toward runtime noise if they blindly echo raw caller/callee lists. Filtering low-signal `_objc_*`, `swift_*`, and stack-check helpers improved the first round immediately, but there is still room for better semantic ranking of "interesting next function" candidates.
+
+## 2026-03-31 - Elite Pilot Foundations PR
+
+- Mission closeout is more useful when it produces a real case file, not just the rolling report. `casefile.md` and `casefile.json` now help, and future work should enrich them with stronger subsystem maps and investigator-authored conclusions.
+- Bridge snapshots are better now that they resolve the containing function from the current address, but they would be even more useful with built-in nearby-string, nearby-selector, and imported-symbol summaries.
+- Seed ranking is much better once it mixes current hypothesis, recent notes, graph degree, and preferred-target diversity. The next step is to make cross-target similarity more semantic than shared imports/selectors alone.
+- Stripped Swift host binaries are still harder to summarize cleanly than frameworks. The new low-signal filters help, but the case file is still thin when there are few Objective-C anchors to recover better labels from.

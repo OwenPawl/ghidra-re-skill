@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -336,6 +337,8 @@ def is_low_signal_symbol(value: str) -> bool:
         "_os_",
         "_Block_",
         "_NSConcrete",
+        "$$associated_type_descriptor",
+        "$$base_conformance_descriptor",
     )
     exact = {
         "_objc_msgSend",
@@ -347,8 +350,115 @@ def is_low_signal_symbol(value: str) -> bool:
         "_swift_release",
         "_swift_retain",
         "___stack_chk_fail",
+        "_NSLog",
+        "_NSLocalizedDescriptionKey",
+        "_NSStringFromClass",
+        "_coderRequiresSecureCoding",
+        "_verifyAllowedClassesByPropertyKey",
     }
     return value in exact or value.startswith(prefixes)
+
+
+def is_low_signal_function_name(value: str) -> bool:
+    value = (value or "").strip()
+    if not value:
+        return True
+    exact = {
+        "None",
+        "entry",
+        "thunk",
+        "__stub_helper",
+        "___stack_chk_fail",
+    }
+    prefixes = (
+        "FUN_",
+        "SUB_",
+        "sub_",
+        "thunk ",
+        "thunk_",
+        "partial apply",
+        "closure #",
+        "outlined ",
+        "__swift",
+        "__copy_helper_block_",
+        "__destroy_helper_block_",
+        "block_copy_helper",
+        "block_destroy_helper",
+        "$$",
+        "$$associated_type_descriptor",
+        "$$base_conformance_descriptor",
+        "$s",
+    )
+    return value in exact or value.startswith(prefixes)
+
+
+def preferred_function_label(metadata, fallback_entry="") -> str:
+    metadata = metadata or {}
+    name = (metadata.get("name") or "").strip()
+    signature = (metadata.get("signature") or "").strip()
+    class_name = (metadata.get("class_name") or "").strip()
+    selector = (metadata.get("selector") or "").strip()
+    namespace = (metadata.get("namespace") or "").strip()
+    match_value = (metadata.get("match_value") or "").strip()
+    match_kind = (metadata.get("match_kind") or "").strip()
+
+    for candidate in (name, signature, match_value):
+        if candidate.startswith("-[") or candidate.startswith("+["):
+            return candidate
+
+    if class_name and selector:
+        return f"-[{class_name} {selector}]"
+
+    if not is_low_signal_function_name(name):
+        return name
+
+    if namespace and not is_low_signal_function_name(namespace):
+        if selector:
+            return f"{namespace}::{selector}"
+        if name:
+            return f"{namespace}::{name}"
+
+    objc_match = re.search(r"([+-]\[[^\]]+\])", signature)
+    if objc_match:
+        return objc_match.group(1)
+
+    if match_kind and match_value and not is_low_signal_function_name(match_value):
+        return match_value
+
+    if signature and not is_low_signal_function_name(signature):
+        return signature
+
+    return name or fallback_entry or metadata.get("entry", "") or "unknown-function"
+
+
+def seed_value_for_label(label: str, metadata=None):
+    metadata = metadata or {}
+    label = (label or "").strip()
+    if not label:
+        return None
+    if label.startswith("-[") or label.startswith("+["):
+        return f"function:{label}"
+    selector = (metadata.get("selector") or "").strip()
+    if selector:
+        return f"selector:{selector}"
+    if label.startswith("_"):
+        return f"symbol:{label}"
+    if ":" in label and " " not in label and "::" not in label:
+        return f"selector:{label}"
+    return f"function:{label}"
+
+
+def seed_quality_penalty(kind: str, value: str) -> float:
+    value = (value or "").strip()
+    if kind == "symbol" and is_low_signal_symbol(value):
+        return 100.0
+    if kind == "function" and is_low_signal_function_name(value):
+        return 30.0
+    if kind == "function" and value.startswith("-[") and (" init" in value or value.endswith("init]")):
+        return -4.0
+    if kind == "selector" and value in {"description", "copyWithZone:", "init", "dealloc", ".cxx_destruct"}:
+        return 20.0
+    return 0.0
 
 
 def infer_seed(raw_value: str):
@@ -373,42 +483,62 @@ def infer_seed(raw_value: str):
 def suggest_seeds(conn, mission):
     suggestions = {}
 
-    def push(seed, reason, score, preferred_targets=None):
+    def push(seed, reason, score, preferred_targets=None, evidence=None):
         inferred = infer_seed(seed)
         if not inferred:
             return
-        if inferred["kind"] == "symbol" and is_low_signal_symbol(inferred["value"]):
+        penalty = seed_quality_penalty(inferred["kind"], inferred["value"])
+        if penalty >= 100.0:
             return
         key = inferred["seed"]
+        adjusted_score = float(score) - penalty
         entry = suggestions.get(key)
         if entry is None:
             entry = {
                 "seed": key,
                 "kind": inferred["kind"],
                 "value": inferred["value"],
-                "score": float(score),
+                "score": adjusted_score,
                 "reasons": [],
                 "preferred_targets": [],
+                "evidence": [],
+                "signal_penalty": penalty,
             }
             suggestions[key] = entry
         else:
-            entry["score"] = max(entry["score"], float(score))
+            entry["score"] = max(entry["score"], adjusted_score)
+            entry["signal_penalty"] = min(entry.get("signal_penalty", penalty), penalty)
         if reason and reason not in entry["reasons"]:
             entry["reasons"].append(reason)
         for item in preferred_targets or []:
             if item and item not in entry["preferred_targets"]:
                 entry["preferred_targets"].append(item)
+        if evidence:
+            entry["evidence"].append(evidence)
 
     for seed in mission.get("seeds", []):
         push(seed, "configured seed", 100.0)
 
+    current_hypothesis = mission.get("current_hypothesis", "")
+    for candidate in re.findall(r"([+-]\[[^\]]+\])", current_hypothesis):
+        push(f"function:{candidate}", "current hypothesis target", 96.0)
+
     note_rows = conn.execute(
-        "SELECT metadata_json FROM notes ORDER BY note_id DESC LIMIT 20"
+        "SELECT kind, title, metadata_json FROM notes ORDER BY note_id DESC LIMIT 30"
     ).fetchall()
     for row in note_rows:
         metadata = json.loads(row["metadata_json"])
+        note_targets = []
+        target_key = metadata.get("target_key", "")
+        if target_key:
+            note_targets.append(target_key)
+        function_name = metadata.get("function_name", "")
+        if function_name:
+            push(f"function:{function_name}", f"recent {row['kind']} focus", 88.0, note_targets)
         for item in metadata.get("next_hops", []):
-            push(item, "next hop from recent analysis note", 90.0)
+            push(item, f"next hop from recent {row['kind']} note", 90.0, note_targets)
+        for item in metadata.get("interesting_next_hops", []):
+            push(item, f"interesting next hop from {row['kind']} note", 92.0, note_targets)
 
     selector_rows = conn.execute(
         """
@@ -433,6 +563,7 @@ def suggest_seeds(conn, mission):
             f"selector:{row['selector_label']}",
             f"implemented across {row['target_count']} target(s)",
             70.0 + min(row["target_count"] * 2.0, 10.0),
+            evidence={"kind": "selector-implementation-spread", "target_count": row["target_count"], "implementation_count": row["implementation_count"]},
         )
 
     symbol_rows = conn.execute(
@@ -458,6 +589,7 @@ def suggest_seeds(conn, mission):
             f"symbol:{symbol_label}",
             f"imported by {row['target_count']} target(s)",
             60.0 + min(row["target_count"] * 1.5, 8.0),
+            evidence={"kind": "symbol-import-spread", "target_count": row["target_count"]},
         )
 
     service_rows = conn.execute(
@@ -480,11 +612,61 @@ def suggest_seeds(conn, mission):
             f"service:{row['service_label']}",
             f"service string seen in {row['target_count']} target(s)",
             55.0 + min(row["target_count"], 6.0),
+            evidence={"kind": "service-string-spread", "target_count": row["target_count"]},
+        )
+
+    function_rows = conn.execute(
+        """
+        SELECT n.label,
+               n.target_key,
+               json_extract(n.metadata_json, '$.entry') AS entry,
+               (
+                 SELECT COUNT(*)
+                 FROM edges incoming
+                 WHERE incoming.dest_key = n.node_key
+                   AND incoming.kind = 'calls'
+               ) AS caller_count,
+               (
+                 SELECT COUNT(*)
+                 FROM edges outgoing
+                 WHERE outgoing.source_key = n.node_key
+                   AND outgoing.kind = 'calls'
+               ) AS callee_count,
+               (
+                 SELECT COUNT(*)
+                 FROM edges implements
+                 WHERE implements.source_key = n.node_key
+                   AND implements.kind = 'implements'
+               ) AS selector_count
+        FROM nodes n
+        WHERE n.kind = 'function'
+          AND n.target_key != '*'
+        ORDER BY selector_count DESC, caller_count DESC, callee_count DESC
+        LIMIT 80
+        """
+    ).fetchall()
+    for row in function_rows:
+        label = row["label"]
+        if is_low_signal_function_name(label):
+            continue
+        total_degree = int(row["caller_count"] or 0) + int(row["callee_count"] or 0)
+        score = 52.0 + min(total_degree * 1.2, 16.0) + min(int(row["selector_count"] or 0) * 6.0, 12.0)
+        push(
+            f"function:{label}",
+            f"high-traffic function in {row['target_key']}",
+            score,
+            preferred_targets=[row["target_key"]],
+            evidence={
+                "kind": "graph-function-degree",
+                "caller_count": int(row["caller_count"] or 0),
+                "callee_count": int(row["callee_count"] or 0),
+                "selector_count": int(row["selector_count"] or 0),
+            },
         )
 
     return sorted(
         suggestions.values(),
-        key=lambda item: (-item["score"], item["kind"], item["value"]),
+        key=lambda item: (-item["score"], item.get("signal_penalty", 0.0), item["kind"], item["value"]),
     )
 
 
@@ -515,7 +697,9 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
 
     for item in functions.get("functions", []):
         node_key = function_node_key(target_key, item.get("entry", ""))
-        upsert_node(conn, "function", node_key, item.get("name", ""), target_key, item)
+        item = dict(item)
+        item["display_label"] = preferred_function_label(item, item.get("entry", ""))
+        upsert_node(conn, "function", node_key, item["display_label"], target_key, item)
         upsert_edge(conn, "derived-from", node_key, framework_key, {"source": "function_inventory"}, 0.9)
 
     for class_name in objc.get("classes", []):
@@ -536,6 +720,9 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
         function_key = function_node_key(target_key, entry)
         selector_key = global_selector_key(selector)
         upsert_node(conn, "selector", selector_key, selector, "*", {"source": "objc_metadata"})
+        method = dict(method)
+        method["display_label"] = preferred_function_label(method, entry)
+        upsert_node(conn, "function", function_key, method["display_label"], target_key, method)
         upsert_edge(conn, "implements", function_key, selector_key, {"source": "objc_metadata", "method": method.get("name", "")}, 0.95)
         if class_name:
             class_key = class_node_key(target_key, class_name)
@@ -627,7 +814,9 @@ def ingest_selector_trace(conn, target_key, selector, trace_payload, analysis_pa
         if not entry:
             continue
         fn_key = function_node_key(target_key, entry)
-        upsert_node(conn, "function", fn_key, name or entry, target_key, item)
+        item = dict(item)
+        item["display_label"] = preferred_function_label(item, entry)
+        upsert_node(conn, "function", fn_key, item["display_label"], target_key, item)
         upsert_edge(conn, "implements", fn_key, selector_key, {"source": "selector-trace", "match_kind": item.get("match_kind", "")}, 0.98)
         upsert_edge(conn, "derived-from", fn_key, framework_key, {"source": "selector-trace"}, 0.85)
     for item in sender_functions:
@@ -636,11 +825,15 @@ def ingest_selector_trace(conn, target_key, selector, trace_payload, analysis_pa
         if not entry:
             continue
         fn_key = function_node_key(target_key, entry)
-        upsert_node(conn, "function", fn_key, name or entry, target_key, item)
+        item = dict(item)
+        item["display_label"] = preferred_function_label(item, entry)
+        upsert_node(conn, "function", fn_key, item["display_label"], target_key, item)
         upsert_edge(conn, "references", fn_key, selector_key, {"source": "selector-trace"}, 0.8)
     if analysis_payload:
         ingest_analyze_target(conn, target_key, "selector", selector, analysis_payload)
-    next_hops = [item.get("name", "") for item in implementations[:3]] + [item.get("name", "") for item in sender_functions[:2]]
+    next_hops = [preferred_function_label(item, item.get("entry", "")) for item in implementations[:3]] + [
+        preferred_function_label(item, item.get("entry", "")) for item in sender_functions[:2]
+    ]
     next_hops = [item for item in next_hops if item]
     add_note(
         conn,
@@ -666,7 +859,9 @@ def ingest_analyze_target(conn, target_key, seed_kind, seed_value, analysis_payl
         return
     framework_key = framework_node_key(target_key)
     source_key = function_node_key(target_key, entry)
-    upsert_node(conn, "function", source_key, function.get("name", entry), target_key, function)
+    function = dict(function)
+    function["display_label"] = preferred_function_label(function, entry)
+    upsert_node(conn, "function", source_key, function["display_label"], target_key, function)
     upsert_edge(conn, "derived-from", source_key, framework_key, {"source": "analyze-target"}, 0.9)
     references = payload.get("references", {})
     for caller in references.get("callers", []):
@@ -674,29 +869,118 @@ def ingest_analyze_target(conn, target_key, seed_kind, seed_value, analysis_payl
         if not caller_entry:
             continue
         caller_key = function_node_key(target_key, caller_entry)
-        upsert_node(conn, "function", caller_key, caller.get("name", caller_entry), target_key, caller)
+        caller = dict(caller)
+        caller["display_label"] = preferred_function_label(caller, caller_entry)
+        upsert_node(conn, "function", caller_key, caller["display_label"], target_key, caller)
         upsert_edge(conn, "calls", caller_key, source_key, {"source": "analyze-target", "relation": "caller"}, 0.85)
     for callee in references.get("callees", []):
         callee_entry = callee.get("entry", "")
         if not callee_entry:
             continue
         callee_key = function_node_key(target_key, callee_entry)
-        upsert_node(conn, "function", callee_key, callee.get("name", callee_entry), target_key, callee)
+        callee = dict(callee)
+        callee["display_label"] = preferred_function_label(callee, callee_entry)
+        upsert_node(conn, "function", callee_key, callee["display_label"], target_key, callee)
         upsert_edge(conn, "calls", source_key, callee_key, {"source": "analyze-target", "relation": "callee"}, 0.85)
-    next_hops = [callee.get("name", "") for callee in references.get("callees", [])[:5] if callee.get("name")]
+    next_hops = [
+        preferred_function_label(callee, callee.get("entry", ""))
+        for callee in references.get("callees", [])[:5]
+        if preferred_function_label(callee, callee.get("entry", ""))
+    ]
     add_note(
         conn,
         "analysis",
         f"Analyze target: {seed_kind}:{seed_value}",
-        f"{target_key} resolved {seed_kind}:{seed_value} to {function.get('name', entry)}.",
+        f"{target_key} resolved {seed_kind}:{seed_value} to {function['display_label']}.",
         {
             "target_key": target_key,
             "seed_kind": seed_kind,
             "seed_value": seed_value,
             "function_entry": entry,
+            "function_name": function["display_label"],
             "next_hops": next_hops,
         },
     )
+
+
+def top_target_signals(conn, target_key, limit=6):
+    rows = conn.execute(
+        """
+        SELECT kind, label, metadata_json
+        FROM nodes
+        WHERE target_key = ?
+          AND kind IN ('function', 'class')
+        ORDER BY
+          CASE kind WHEN 'class' THEN 0 ELSE 1 END,
+          label
+        LIMIT 200
+        """,
+        (target_key,),
+    ).fetchall()
+    classes = []
+    functions = []
+    for row in rows:
+        label = row["label"]
+        if row["kind"] == "class":
+            if label not in classes:
+                classes.append(label)
+            continue
+        if is_low_signal_function_name(label):
+            continue
+        if label not in functions:
+            functions.append(label)
+    selector_rows = conn.execute(
+        """
+        SELECT selector.label, COUNT(*) AS hits
+        FROM edges e
+        JOIN nodes selector ON selector.node_key = e.dest_key
+        JOIN nodes source ON source.node_key = e.source_key
+        WHERE source.target_key = ?
+          AND e.kind = 'implements'
+          AND selector.kind = 'selector'
+        GROUP BY selector.node_key, selector.label
+        ORDER BY hits DESC, selector.label
+        LIMIT ?
+        """,
+        (target_key, limit),
+    ).fetchall()
+    selectors = [row["label"] for row in selector_rows if row["label"] not in {"description", "copyWithZone:", "init", "dealloc"}]
+    return {
+        "top_classes": classes[:limit],
+        "top_functions": functions[:limit],
+        "top_selectors": selectors[:limit],
+    }
+
+
+def derive_unresolved_questions(payload):
+    questions = []
+    if not payload["cross_target_links_found"]:
+        questions.append("Which imports, selectors, or services best connect the current targets into one subsystem?")
+    if any(target["has_live_session"] is False for target in payload["targets_visited"]):
+        questions.append("Which headless-only targets should be opened live next for tighter follow-up navigation?")
+    for seed in payload.get("suggested_seeds", [])[:6]:
+        reason = "; ".join(seed.get("reasons", [])[:2])
+        questions.append(f"What does {seed['seed']} reveal if followed next? {reason}".strip())
+    deduped = []
+    for item in questions:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped[:8]
+
+
+def confidence_ledger(payload):
+    if not payload["cross_target_links_found"]:
+        return {"high": 0, "medium": 0, "low": 1}
+    ledger = {"high": 0, "medium": 0, "low": 0}
+    for link in payload["cross_target_links_found"]:
+        confidence = float(link.get("confidence", 0.0))
+        if confidence >= 0.8:
+            ledger["high"] += 1
+        elif confidence >= 0.5:
+            ledger["medium"] += 1
+        else:
+            ledger["low"] += 1
+    return ledger
 
 
 def query_seed(conn, kind, value):
@@ -816,6 +1100,30 @@ def report_payload(conn, mission):
             recommended_next_hops.append(
                 f"Compare {link['from']} with {link['to']} via shared selectors/imports."
             )
+    target_summaries = []
+    for target in targets:
+        target_summaries.append(
+            {
+                "target_key": target["target_key"],
+                "project_name": target["project_name"],
+                "program_name": target["program_name"],
+                "signals": top_target_signals(conn, target["target_key"]),
+            }
+        )
+    unresolved_questions = derive_unresolved_questions(
+        {
+            "targets_visited": [
+                {
+                    "target_key": target["target_key"],
+                    "has_live_session": any(session["target_key"] == target["target_key"] for session in sessions),
+                }
+                for target in targets
+            ],
+            "cross_target_links_found": links,
+            "suggested_seeds": suggest_seeds(conn, mission)[:12],
+        }
+    )
+    ledger = confidence_ledger({"cross_target_links_found": links})
     return {
         "mission_name": mission.get("mission_name", ""),
         "mission_slug": mission.get("mission_slug", ""),
@@ -841,6 +1149,9 @@ def report_payload(conn, mission):
         "cross_target_links_found": links,
         "recommended_next_hops": recommended_next_hops[:8],
         "suggested_seeds": suggest_seeds(conn, mission)[:12],
+        "target_summaries": target_summaries,
+        "unresolved_questions": unresolved_questions,
+        "confidence_ledger": ledger,
         "notes": notes,
     }
 
@@ -865,6 +1176,16 @@ def render_report(paths, conn, mission):
     for target in payload["targets_visited"]:
         session_state = "live" if target["has_live_session"] else "headless-only"
         lines.append(f"- {target['target_key']} ({session_state})")
+    lines.extend(["", "## Target summaries"])
+    for summary in payload["target_summaries"]:
+        lines.append(f"- {summary['target_key']}")
+        signals = summary["signals"]
+        if signals["top_classes"]:
+            lines.append(f"  classes: {', '.join(signals['top_classes'][:4])}")
+        if signals["top_selectors"]:
+            lines.append(f"  selectors: {', '.join(signals['top_selectors'][:4])}")
+        if signals["top_functions"]:
+            lines.append(f"  functions: {', '.join(signals['top_functions'][:4])}")
     lines.extend(["", "## Cross-target links found"])
     if payload["cross_target_links_found"]:
         for link in payload["cross_target_links_found"][:10]:
@@ -883,11 +1204,53 @@ def render_report(paths, conn, mission):
         lines.append(
             f"- {item['seed']} (score={item['score']:.1f}; reasons={'; '.join(item['reasons'])})"
         )
+    lines.extend(["", "## Confidence ledger"])
+    lines.append(
+        f"- high={payload['confidence_ledger']['high']}, medium={payload['confidence_ledger']['medium']}, low={payload['confidence_ledger']['low']}"
+    )
+    lines.extend(["", "## Unresolved questions"])
+    for item in payload["unresolved_questions"] or ["No unresolved questions recorded yet."]:
+        lines.append(f"- {item}")
     lines.extend(["", "## Recent notes"])
     for note in payload["notes"][:5]:
         lines.append(f"- [{note['kind']}] {note['title']}: {note['body']}")
     write_json(paths["latest_json"], payload)
     paths["latest_md"].write_text("\n".join(lines) + "\n")
+    if payload["finished_at"]:
+        casefile = {
+            "mission_name": payload["mission_name"],
+            "finished_at": payload["finished_at"],
+            "current_hypothesis": payload["current_hypothesis"],
+            "targets_visited": payload["targets_visited"],
+            "target_summaries": payload["target_summaries"],
+            "cross_target_links_found": payload["cross_target_links_found"],
+            "evidence_used": payload["evidence_used"][:12],
+            "recommended_next_hops": payload["recommended_next_hops"],
+            "unresolved_questions": payload["unresolved_questions"],
+            "confidence_ledger": payload["confidence_ledger"],
+        }
+        write_json(paths["reports_dir"] / "casefile.json", casefile)
+        case_lines = [
+            f"# {payload['mission_name']} case file",
+            "",
+            f"Finished at: {payload['finished_at']}",
+            "",
+            "## Current hypothesis",
+            payload["current_hypothesis"],
+            "",
+            "## Target summaries",
+        ]
+        for summary in payload["target_summaries"]:
+            case_lines.append(f"- {summary['target_key']}")
+            signals = summary["signals"]
+            if signals["top_functions"]:
+                case_lines.append(f"  top functions: {', '.join(signals['top_functions'][:5])}")
+            if signals["top_selectors"]:
+                case_lines.append(f"  top selectors: {', '.join(signals['top_selectors'][:5])}")
+        case_lines.extend(["", "## Unresolved questions"])
+        for item in payload["unresolved_questions"]:
+            case_lines.append(f"- {item}")
+        (paths["reports_dir"] / "casefile.md").write_text("\n".join(case_lines) + "\n")
     return payload
 
 

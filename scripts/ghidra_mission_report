@@ -36,6 +36,14 @@ case "$format" in
   json)
     python3 "$(ghidra_re_mission_backend)" render-report --mission-dir "$mission_dir"
     ;;
+  casefile)
+    python3 "$(ghidra_re_mission_backend)" render-report --mission-dir "$mission_dir" >/dev/null
+    cat "$mission_dir/reports/casefile.md"
+    ;;
+  casefile-path)
+    python3 "$(ghidra_re_mission_backend)" render-report --mission-dir "$mission_dir" >/dev/null
+    printf '%s\n' "$mission_dir/reports/casefile.md"
+    ;;
   markdown)
     python3 "$(ghidra_re_mission_backend)" render-report --mission-dir "$mission_dir" >/dev/null
     cat "$mission_dir/reports/latest.md"
