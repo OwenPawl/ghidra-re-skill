@@ -31,27 +31,32 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
 5. Extend the mission with a seed-driven trace:
    - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value>`
-6. Read the mission report:
+6. For a more autonomous pass, let the mission keep driving its own next hops:
+   - `scripts/ghidra_mission_autopilot <mission_name> [rounds=3]`
+7. Read the mission report:
    - `scripts/ghidra_mission_report <mission_name>`
-7. For a single target, import and analyze into a dedicated project:
+8. Finish the mission and close its live Ghidra sessions unless you explicitly keep them open:
+   - `scripts/ghidra_mission_finish <mission_name>`
+9. For a single target, import and analyze into a dedicated project:
    - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
-7. Export the default Apple-focused bundle:
+10. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-8. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
+11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
-9. Generate a function dossier for a top candidate:
+12. Generate a function dossier for a top candidate:
    - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
-10. Apply a finding back into the project when you confirm something interesting:
+13. Apply a finding back into the project when you confirm something interesting:
    - `scripts/ghidra_apply_finding <project_name> <program_name> function=... title=... comment=...`
-11. Run an extra script when needed:
+14. Run an extra script when needed:
    - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
-12. Append any friction or missing-feature notes to `references/use-case-driven-notes.md` before you wrap up the session.
-13. Open the project in the GUI:
+-15. Append any friction or missing-feature notes to `references/use-case-driven-notes.md` before you wrap up the session.
+-16. Open the project in the GUI:
    - `scripts/ghidra_open_gui <project_name> [program_name]`
-14. Arm or reuse the live bridge when you want an interactive RE loop:
+-17. Arm or reuse the live bridge when you want an interactive RE loop:
    - `scripts/ghidra_bridge_open <project_name> [program_name]`
-15. Use the live bridge wrappers for inspection or edits:
+-18. Use the live bridge wrappers for inspection or edits:
    - `scripts/ghidra_bridge_current_context`
+   - `scripts/ghidra_bridge_snapshot`
    - `scripts/ghidra_bridge_analyze_target <query>`
    - `scripts/ghidra_bridge_decompile_current`
    - `scripts/ghidra_bridge_functions_search <query>`
@@ -61,14 +66,16 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_bridge_comment ...`
    - `scripts/ghidra_bridge_patch_bytes ...`
    - `scripts/ghidra_bridge_patch_instruction ...`
-13. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
+-19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
    - `scripts/build_mac_desktop_share_package [output_zip]`
-14. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
+-20. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
    - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
-15. On Windows, optionally import the native module after install:
+-21. On Windows, optionally import the native module after install:
    - `Import-Module GhidraRe`
    - `Get-GhidraReBridgeSessions`
    - `Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/.../WorkflowKit'`
+22. Run the explicit polish pass before serious testing or publishing:
+   - `scripts/ghidra_polish_release [mode=quick|release]`
 
 ## Default Workflow
 
@@ -92,6 +99,8 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
   - `reports/latest.json`
 - Mission runs are notes-only by default. They do not rename symbols, comment programs, or patch bytes unless you explicitly call the existing write wrappers outside the mission flow.
 - `scripts/ghidra_mission_trace` uses the investigation graph first, then live bridge helpers like `functions/search`, `analyze/target`, and `selector-trace`.
+- `scripts/ghidra_mission_autopilot` extends that loop by choosing the next seed from configured seeds, graph-derived suggestions, and recent analysis notes, then capturing a live bridge snapshot back into the mission artifacts.
+- `scripts/ghidra_mission_finish` is the default closeout path. It renders the report, records the closeout in the mission metadata, and closes the mission's bridge-managed Ghidra sessions unless `keep_sessions_open=true`.
 
 ### 3) Use the Apple export bundle first
 - Run `scripts/ghidra_export_apple_bundle` after import unless the user only wants a narrow script run.
@@ -123,6 +132,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - On macOS, detached launches use a hidden `screen` keeper session so Ghidra survives after the launcher command exits and the bridge remains usable across the rest of the Codex session.
 - Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.
 - `scripts/ghidra_bridge_call` is the raw HTTP wrapper; prefer the convenience wrappers for common tasks.
+- `scripts/ghidra_bridge_snapshot` captures the current live session, function, decompile, references, and variables in one machine-readable artifact for later ingestion or notes.
 - Most live bridge wrappers accept optional `session=<id>`, `project=<name>`, or `program=<name>` selectors.
 - Prefer `project=` or `session=` when duplicate live targets share the same `program_name`.
 - Mutating bridge calls require `write=true`; destructive bridge calls also require `destructive=true`.
@@ -144,12 +154,14 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_bridge_arm <project_name> [program_name]`
 - `scripts/ghidra_bridge_open <project_name> [program_name]`
 - `scripts/ghidra_bridge_close [session=<id>|project=<name>|program=<name>]`
+- `scripts/ghidra_bridge_close_all [mission=<name>] [all=true]`
 - `scripts/ghidra_bridge_disarm`
 - `scripts/ghidra_bridge_sessions`
 - `scripts/ghidra_bridge_select session=<id>|project=<name>|program=<name>`
 - `scripts/ghidra_bridge_status`
 - `scripts/ghidra_bridge_call <endpoint> [json_body]`
 - `scripts/ghidra_bridge_current_context`
+- `scripts/ghidra_bridge_snapshot [key=value ...]`
 - `scripts/ghidra_bridge_analyze_target <query> [key=value ...]`
 - `scripts/ghidra_bridge_decompile_current [key=value ...]`
 - `scripts/ghidra_bridge_functions_search <query> [key=value ...]`
@@ -174,12 +186,16 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_mission_status <mission_name>`
 - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value> [target=project:program]`
 - `scripts/ghidra_mission_report <mission_name> [format=markdown|json|path]`
+- `scripts/ghidra_mission_autopilot <mission_name> [rounds=3] [seed=<kind:value>] [target=project:program]`
+- `scripts/ghidra_mission_finish <mission_name> [all=true] [keep_sessions_open=true]`
 - `scripts/bootstrap [--skip-smoke-test]`
 - `scripts/doctor`
+- `scripts/ghidra_polish_release [mode=quick|release]`
 - `scripts/build_share_package [output_zip]`
 - `scripts/build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]`
 - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 - `powershell/GhidraRe.psd1` and `powershell/GhidraRe.psm1` for native Windows PowerShell wrappers
+- `scripts/ghidra_polish_release` for the explicit pre-test release/polish pass
 
 ### Script argument style
 - Prefer `key=value` arguments because they are robust under `analyzeHeadless`.

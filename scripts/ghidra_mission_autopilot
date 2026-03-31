@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_mission_autopilot <mission_name> [rounds=3] [limit_targets=3] [trace_limit=5] [seed=<kind:value>] [target=<project:program>]
+EOF
+}
+
+[[ $# -ge 1 ]] || {
+  usage >&2
+  exit 1
+}
+
+mission_name="$1"
+shift
+
+rounds=3
+limit_targets=3
+trace_limit=5
+seed_overrides=()
+target_filters=()
+
+for arg in "$@"; do
+  case "$arg" in
+    rounds=*)
+      rounds="${arg#rounds=}"
+      ;;
+    limit_targets=*)
+      limit_targets="${arg#limit_targets=}"
+      ;;
+    trace_limit=*)
+      trace_limit="${arg#trace_limit=}"
+      ;;
+    seed=*)
+      seed_overrides+=("${arg#seed=}")
+      ;;
+    target=*)
+      target_filters+=("${arg#target=}")
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+mission_dir="$(ghidra_re_investigation_dir "$mission_name")"
+[[ -d "$mission_dir" ]] || ghidra_re_die "mission not found: $mission_name"
+
+backend="$(ghidra_re_mission_backend)"
+autopilot_dir="$mission_dir/exports/autopilot"
+state_file="$autopilot_dir/state.json"
+mkdir -p "$autopilot_dir"
+
+if [[ ! -f "$state_file" ]]; then
+  printf '{\n  "visited_seeds": [],\n  "rounds": []\n}\n' >"$state_file"
+fi
+
+round=1
+while (( round <= rounds )); do
+  suggestion_file="$(mktemp "$autopilot_dir/suggestions.XXXXXX.json")"
+  selection_file="$(mktemp "$autopilot_dir/selection.XXXXXX.json")"
+  trap 'rm -f "$suggestion_file" "$selection_file"' EXIT
+
+  python3 "$backend" suggest-seeds --mission-dir "$mission_dir" >"$suggestion_file"
+  python_args=("$state_file" "$suggestion_file" "$round")
+  if (( ${#seed_overrides[@]} > 0 )); then
+    python_args+=("${seed_overrides[@]}")
+  fi
+  python3 - "${python_args[@]}" >"$selection_file" <<'PY'
+import json
+import pathlib
+import sys
+
+state = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+suggestions = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")).get("suggestions", [])
+round_index = int(sys.argv[3])
+explicit = sys.argv[4:]
+visited = set(state.get("visited_seeds", []))
+
+def infer_seed(raw):
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if ":" in raw:
+        kind, value = raw.split(":", 1)
+        if kind in {"selector", "symbol", "function", "string", "class", "service"} and value:
+            return {"seed": raw, "kind": kind, "value": value, "score": 999.0, "reasons": ["explicit override"]}
+    if raw.startswith("-[") or raw.startswith("+["):
+        return {"seed": f"function:{raw}", "kind": "function", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
+    if raw.startswith("_"):
+        return {"seed": f"symbol:{raw}", "kind": "symbol", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
+    if ":" in raw:
+        return {"seed": f"selector:{raw}", "kind": "selector", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
+    return {"seed": f"function:{raw}", "kind": "function", "value": raw, "score": 999.0, "reasons": ["explicit override"]}
+
+candidate = None
+for item in explicit:
+    parsed = infer_seed(item)
+    if parsed and parsed["seed"] not in visited:
+        candidate = parsed
+        break
+
+if candidate is None:
+    for item in suggestions:
+        if item.get("seed") and item["seed"] not in visited:
+            candidate = item
+            break
+
+if candidate is None:
+    print(json.dumps({"ok": False, "reason": "no-unvisited-seeds"}))
+    raise SystemExit(0)
+
+print(json.dumps({"ok": True, "round": round_index, "selected": candidate}, indent=2))
+PY
+
+  selection_ok="$(python3 - "$selection_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("true" if payload.get("ok") else "false")
+PY
+)"
+  if [[ "$selection_ok" != "true" ]]; then
+    break
+  fi
+
+  selected_seed="$(python3 - "$selection_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload["selected"]["seed"])
+PY
+)"
+  selected_reason="$(python3 - "$selection_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+reasons = payload["selected"].get("reasons", [])
+print(reasons[0] if reasons else "")
+PY
+)"
+
+  round_slug="$(ghidra_re_sanitize_name "$selected_seed")"
+  round_dir="$autopilot_dir/round-$(printf '%02d' "$round")-$round_slug"
+  mkdir -p "$round_dir"
+
+  trace_args=("$mission_name" "seed=$selected_seed" "limit_targets=$limit_targets" "trace_limit=$trace_limit")
+  if (( ${#target_filters[@]} > 0 )); then
+    for target_filter in "${target_filters[@]}"; do
+      trace_args+=("target=$target_filter")
+    done
+  fi
+
+  "$SCRIPT_DIR/ghidra_mission_trace" "${trace_args[@]}" >"$round_dir/trace.log"
+  "$SCRIPT_DIR/ghidra_bridge_snapshot" >"$round_dir/bridge-snapshot.json" || true
+  "$SCRIPT_DIR/ghidra_mission_report" "$mission_name" format=json >"$round_dir/report.json"
+
+  snapshot_summary_file="$round_dir/snapshot-summary.json"
+  python3 - "$round_dir/bridge-snapshot.json" "$round_dir/report.json" "$selected_seed" "$selected_reason" >"$snapshot_summary_file" <<'PY'
+import json
+import pathlib
+import sys
+
+snapshot_path = pathlib.Path(sys.argv[1])
+report_path = pathlib.Path(sys.argv[2])
+seed = sys.argv[3]
+reason = sys.argv[4]
+
+def load(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+snapshot = load(snapshot_path)
+report = load(report_path)
+current_context = snapshot.get("current_context", {})
+repository = snapshot.get("repository", {})
+function_payload = snapshot.get("function", {})
+function_result = function_payload.get("result", {}) if isinstance(function_payload, dict) else {}
+function_name = ""
+for candidate in (
+    current_context.get("function_name"),
+    function_result.get("name"),
+    function_result.get("function", {}).get("name") if isinstance(function_result, dict) else "",
+):
+    if candidate:
+        function_name = candidate
+        break
+
+references_payload = snapshot.get("references", {})
+references_result = references_payload.get("result", {}) if isinstance(references_payload, dict) else {}
+next_hops = []
+for bucket in ("callees", "callers"):
+    for item in references_result.get(bucket, []):
+        name = item.get("name", "")
+        if name and name not in next_hops:
+            next_hops.append(name)
+for item in report.get("recommended_next_hops", []):
+    if item and item not in next_hops:
+        next_hops.append(item)
+
+payload = {
+    "seed": seed,
+    "reason": reason,
+    "project_name": repository.get("project_name", ""),
+    "program_name": repository.get("program_name", ""),
+    "target_key": f"{repository.get('project_name','')}:{repository.get('program_name','')}" if repository.get("project_name") and repository.get("program_name") else "",
+    "function_name": function_name,
+    "next_hops": next_hops[:8],
+}
+print(json.dumps(payload, indent=2))
+PY
+
+  target_key="$(python3 - "$snapshot_summary_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload.get("target_key", ""))
+PY
+)"
+  if [[ -n "$target_key" ]]; then
+    python3 "$backend" add-artifact \
+      --mission-dir "$mission_dir" \
+      --target-key "$target_key" \
+      --kind "bridge-snapshot" \
+      --path "$round_dir/bridge-snapshot.json" \
+      --metadata-json "$(cat "$snapshot_summary_file")" >/dev/null
+  fi
+
+  note_title="Autopilot round $round: $selected_seed"
+  note_body="$(python3 - "$snapshot_summary_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+function_name = payload.get("function_name", "")
+target_key = payload.get("target_key", "") or "unknown target"
+reason = payload.get("reason", "")
+if function_name:
+    print(f"Autopilot followed {payload.get('seed')} into {function_name} on {target_key}. Reason: {reason}.")
+else:
+    print(f"Autopilot traced {payload.get('seed')} on {target_key}. Reason: {reason}.")
+PY
+)"
+  python3 "$backend" add-note \
+    --mission-dir "$mission_dir" \
+    --kind "autopilot" \
+    --title "$note_title" \
+    --body "$note_body" \
+    --metadata-json "$(cat "$snapshot_summary_file")" >/dev/null
+
+  new_hypothesis="$(python3 - "$snapshot_summary_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+function_name = payload.get("function_name", "")
+target_key = payload.get("target_key", "") or "current target"
+if function_name:
+    print(f"Autopilot is currently following {payload.get('seed')} through {function_name} on {target_key}.")
+else:
+    print(f"Autopilot is currently exploring {payload.get('seed')} on {target_key}.")
+PY
+)"
+  python3 "$backend" set-hypothesis --mission-dir "$mission_dir" --value "$new_hypothesis" >/dev/null
+
+  python3 - "$state_file" "$selected_seed" "$round_dir" "$selected_reason" <<'PY'
+import json
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+seed = sys.argv[2]
+round_dir = sys.argv[3]
+reason = sys.argv[4]
+state = json.loads(state_path.read_text(encoding="utf-8"))
+visited = state.setdefault("visited_seeds", [])
+rounds = state.setdefault("rounds", [])
+if seed not in visited:
+    visited.append(seed)
+rounds.append({"seed": seed, "round_dir": round_dir, "reason": reason})
+state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+PY
+
+  round=$((round + 1))
+done
+
+python3 "$backend" render-report --mission-dir "$mission_dir" >/dev/null
+printf 'Mission autopilot complete: %s\n' "$mission_name"
+printf 'Report: %s\n' "$mission_dir/reports/latest.md"

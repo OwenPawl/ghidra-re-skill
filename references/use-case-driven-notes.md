@@ -25,3 +25,9 @@ This file captures friction, missing features, and quality-of-life improvements 
 - Multi-target missions are now viable, but the first raw-binary import can still dominate startup time even with demangling disabled by default. A future "fast import now, enrich later" mode would make the pilot feel more autonomous on fresh targets.
 - Multi-session selection works well by `project=` or `session=`, but `program=` becomes ambiguous fast when two live targets share the same binary name. Add a helper that shows compact disambiguation choices or prefers exact `project:program` refs in more wrappers.
 - When a mission needs its first baseline export for a target that is already open live, the current flow closes and reopens that target because Ghidra project locks are exclusive. A future live-export ingest path would avoid that churn.
+
+## 2026-03-31 - Autopilot And Bridge Snapshots
+
+- `ghidra_mission_autopilot` is already useful when a mission has a decent graph and a few meaningful next hops. On `elite_pilot_smoke`, one round was enough to pick a real WorkflowKit function seed, navigate there live, capture a bridge snapshot artifact, and update the mission hypothesis automatically.
+- `ghidra_bridge_snapshot` currently mirrors the live UI faithfully: if the current location is only an address and not a resolvable function, the function and decompile sections are empty. A future version should resolve the containing function from the current address so snapshots are richer even when the UI is not already parked on a clean function entry.
+- Autopilot-derived next hops can drift back toward runtime noise if they blindly echo raw caller/callee lists. Filtering low-signal `_objc_*`, `swift_*`, and stack-check helpers improved the first round immediately, but there is still room for better semantic ranking of "interesting next function" candidates.

@@ -326,6 +326,168 @@ def maybe_service_name(value: str) -> bool:
     return value.startswith("com.apple.") or value.startswith("group.") or value.endswith(".xpc") or value.startswith("is.workflow.")
 
 
+def is_low_signal_symbol(value: str) -> bool:
+    prefixes = (
+        "__",
+        "_objc_",
+        "_swift_",
+        "swift_",
+        "_dispatch_",
+        "_os_",
+        "_Block_",
+        "_NSConcrete",
+    )
+    exact = {
+        "_objc_msgSend",
+        "_objc_retain",
+        "_objc_release",
+        "_objc_autoreleaseReturnValue",
+        "_objc_retainAutoreleasedReturnValue",
+        "_swift_allocObject",
+        "_swift_release",
+        "_swift_retain",
+        "___stack_chk_fail",
+    }
+    return value in exact or value.startswith(prefixes)
+
+
+def infer_seed(raw_value: str):
+    value = (raw_value or "").strip()
+    if not value:
+        return None
+    if ":" in value:
+        kind, remainder = value.split(":", 1)
+        if kind in {"selector", "symbol", "function", "string", "class", "service"} and remainder:
+            return {"seed": value, "kind": kind, "value": remainder}
+    if value.startswith("-[") or value.startswith("+["):
+        return {"seed": f"function:{value}", "kind": "function", "value": value}
+    if maybe_service_name(value):
+        return {"seed": f"service:{value}", "kind": "service", "value": value}
+    if value.startswith("_"):
+        return {"seed": f"symbol:{value}", "kind": "symbol", "value": value}
+    if ":" in value:
+        return {"seed": f"selector:{value}", "kind": "selector", "value": value}
+    return {"seed": f"function:{value}", "kind": "function", "value": value}
+
+
+def suggest_seeds(conn, mission):
+    suggestions = {}
+
+    def push(seed, reason, score, preferred_targets=None):
+        inferred = infer_seed(seed)
+        if not inferred:
+            return
+        if inferred["kind"] == "symbol" and is_low_signal_symbol(inferred["value"]):
+            return
+        key = inferred["seed"]
+        entry = suggestions.get(key)
+        if entry is None:
+            entry = {
+                "seed": key,
+                "kind": inferred["kind"],
+                "value": inferred["value"],
+                "score": float(score),
+                "reasons": [],
+                "preferred_targets": [],
+            }
+            suggestions[key] = entry
+        else:
+            entry["score"] = max(entry["score"], float(score))
+        if reason and reason not in entry["reasons"]:
+            entry["reasons"].append(reason)
+        for item in preferred_targets or []:
+            if item and item not in entry["preferred_targets"]:
+                entry["preferred_targets"].append(item)
+
+    for seed in mission.get("seeds", []):
+        push(seed, "configured seed", 100.0)
+
+    note_rows = conn.execute(
+        "SELECT metadata_json FROM notes ORDER BY note_id DESC LIMIT 20"
+    ).fetchall()
+    for row in note_rows:
+        metadata = json.loads(row["metadata_json"])
+        for item in metadata.get("next_hops", []):
+            push(item, "next hop from recent analysis note", 90.0)
+
+    selector_rows = conn.execute(
+        """
+        SELECT selector.label AS selector_label,
+               COUNT(DISTINCT fn.target_key) AS target_count,
+               COUNT(*) AS implementation_count
+        FROM edges e
+        JOIN nodes selector ON selector.node_key = e.dest_key
+        JOIN nodes fn ON fn.node_key = e.source_key
+        WHERE e.kind = 'implements'
+          AND selector.kind = 'selector'
+          AND fn.target_key != '*'
+        GROUP BY selector.node_key, selector.label
+        ORDER BY target_count DESC, implementation_count DESC, selector.label
+        LIMIT 20
+        """
+    ).fetchall()
+    for row in selector_rows:
+        if row["selector_label"] in {"description", "copyWithZone:", "init", "dealloc", ".cxx_destruct"}:
+            continue
+        push(
+            f"selector:{row['selector_label']}",
+            f"implemented across {row['target_count']} target(s)",
+            70.0 + min(row["target_count"] * 2.0, 10.0),
+        )
+
+    symbol_rows = conn.execute(
+        """
+        SELECT symbol.label AS symbol_label,
+               COUNT(DISTINCT framework.target_key) AS target_count
+        FROM edges e
+        JOIN nodes symbol ON symbol.node_key = e.dest_key
+        JOIN nodes framework ON framework.node_key = e.source_key
+        WHERE e.kind = 'imports'
+          AND symbol.kind = 'symbol'
+          AND framework.kind = 'framework'
+        GROUP BY symbol.node_key, symbol.label
+        ORDER BY target_count DESC, symbol.label
+        LIMIT 30
+        """
+    ).fetchall()
+    for row in symbol_rows:
+        symbol_label = row["symbol_label"]
+        if is_low_signal_symbol(symbol_label):
+            continue
+        push(
+            f"symbol:{symbol_label}",
+            f"imported by {row['target_count']} target(s)",
+            60.0 + min(row["target_count"] * 1.5, 8.0),
+        )
+
+    service_rows = conn.execute(
+        """
+        SELECT service.label AS service_label,
+               COUNT(DISTINCT framework.target_key) AS target_count
+        FROM edges e
+        JOIN nodes framework ON framework.node_key = e.source_key
+        JOIN nodes service ON service.node_key = e.dest_key
+        WHERE e.kind = 'derived-from'
+          AND framework.kind = 'framework'
+          AND service.kind = 'service'
+        GROUP BY service.node_key, service.label
+        ORDER BY target_count DESC, service.label
+        LIMIT 20
+        """
+    ).fetchall()
+    for row in service_rows:
+        push(
+            f"service:{row['service_label']}",
+            f"service string seen in {row['target_count']} target(s)",
+            55.0 + min(row["target_count"], 6.0),
+        )
+
+    return sorted(
+        suggestions.values(),
+        key=lambda item: (-item["score"], item["kind"], item["value"]),
+    )
+
+
 def register_framework_node(conn, target_key, summary):
     label = summary.get("program_name", target_key)
     key = framework_node_key(target_key)
@@ -644,6 +806,9 @@ def report_payload(conn, mission):
     recommended_next_hops = []
     for note in notes:
         for item in note["metadata"].get("next_hops", []):
+            inferred = infer_seed(item)
+            if inferred and inferred["kind"] == "symbol" and is_low_signal_symbol(inferred["value"]):
+                continue
             if item and item not in recommended_next_hops:
                 recommended_next_hops.append(item)
     if not recommended_next_hops:
@@ -660,6 +825,7 @@ def report_payload(conn, mission):
         "configured_seeds": mission.get("seeds", []),
         "created_at": mission.get("created_at", ""),
         "updated_at": mission.get("updated_at", ""),
+        "finished_at": mission.get("finished_at", ""),
         "current_hypothesis": current_hypothesis,
         "targets_visited": [
             {
@@ -674,6 +840,7 @@ def report_payload(conn, mission):
         "evidence_used": evidence_used,
         "cross_target_links_found": links,
         "recommended_next_hops": recommended_next_hops[:8],
+        "suggested_seeds": suggest_seeds(conn, mission)[:12],
         "notes": notes,
     }
 
@@ -685,12 +852,16 @@ def render_report(paths, conn, mission):
         "",
         f"Goal: {payload['goal']}",
         f"Mode: {payload['mode']}",
+    ]
+    if payload["finished_at"]:
+        lines.append(f"Finished at: {payload['finished_at']}")
+    lines.extend([
         "",
         "## Current hypothesis",
         payload["current_hypothesis"],
         "",
         "## Targets visited",
-    ]
+    ])
     for target in payload["targets_visited"]:
         session_state = "live" if target["has_live_session"] else "headless-only"
         lines.append(f"- {target['target_key']} ({session_state})")
@@ -707,6 +878,11 @@ def render_report(paths, conn, mission):
     lines.extend(["", "## Recommended next hops"])
     for item in payload["recommended_next_hops"] or ["No next hops recorded yet."]:
         lines.append(f"- {item}")
+    lines.extend(["", "## Suggested seeds"])
+    for item in payload["suggested_seeds"][:8]:
+        lines.append(
+            f"- {item['seed']} (score={item['score']:.1f}; reasons={'; '.join(item['reasons'])})"
+        )
     lines.extend(["", "## Recent notes"])
     for note in payload["notes"][:5]:
         lines.append(f"- [{note['kind']}] {note['title']}: {note['body']}")
@@ -835,6 +1011,72 @@ def cmd_status(args):
     print(json.dumps(payload, indent=2))
 
 
+def cmd_add_note(args):
+    paths = mission_paths(Path(args.mission_dir))
+    conn = connect_db(paths["graph_db"])
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    add_note(conn, args.kind, args.title, args.body, metadata)
+    add_run(conn, "mission-note", "success", {"kind": args.kind, "title": args.title})
+    conn.commit()
+    touch_mission(paths)
+    print(json.dumps({"ok": True, "kind": args.kind, "title": args.title}, indent=2))
+
+
+def cmd_add_artifact(args):
+    paths = mission_paths(Path(args.mission_dir))
+    conn = connect_db(paths["graph_db"])
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    add_artifact(conn, args.target_key, args.kind, Path(args.path), metadata)
+    conn.commit()
+    touch_mission(paths)
+    print(json.dumps({"ok": True, "kind": args.kind, "path": args.path}, indent=2))
+
+
+def cmd_set_hypothesis(args):
+    paths = mission_paths(Path(args.mission_dir))
+    mission = load_mission(paths)
+    mission["current_hypothesis"] = args.value
+    save_mission(paths, mission)
+    print(json.dumps({"ok": True, "current_hypothesis": args.value}, indent=2))
+
+
+def cmd_suggest_seeds(args):
+    paths = mission_paths(Path(args.mission_dir))
+    conn = connect_db(paths["graph_db"])
+    mission = load_mission(paths)
+    print(json.dumps({"suggestions": suggest_seeds(conn, mission)}, indent=2))
+
+
+def cmd_finish(args):
+    paths = mission_paths(Path(args.mission_dir))
+    conn = connect_db(paths["graph_db"])
+    mission = load_mission(paths)
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    finished_at = utc_now()
+    mission["finished_at"] = finished_at
+    if args.report_path:
+        mission["last_report_path"] = args.report_path
+    if args.summary:
+        add_note(conn, "finish", "Mission finished", args.summary, metadata)
+    add_run(conn, "mission-finish", args.status, metadata)
+    save_mission(paths, mission)
+    conn.commit()
+    payload = render_report(paths, conn, mission)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "finished_at": finished_at,
+                "report_path": args.report_path,
+                "summary": args.summary,
+                "status": args.status,
+                "report": payload,
+            },
+            indent=2,
+        )
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -898,6 +1140,39 @@ def build_parser():
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--mission-dir", required=True)
     status_parser.set_defaults(func=cmd_status)
+
+    note_parser = subparsers.add_parser("add-note")
+    note_parser.add_argument("--mission-dir", required=True)
+    note_parser.add_argument("--kind", required=True)
+    note_parser.add_argument("--title", required=True)
+    note_parser.add_argument("--body", required=True)
+    note_parser.add_argument("--metadata-json", default="{}")
+    note_parser.set_defaults(func=cmd_add_note)
+
+    artifact_parser = subparsers.add_parser("add-artifact")
+    artifact_parser.add_argument("--mission-dir", required=True)
+    artifact_parser.add_argument("--target-key", required=True)
+    artifact_parser.add_argument("--kind", required=True)
+    artifact_parser.add_argument("--path", required=True)
+    artifact_parser.add_argument("--metadata-json", default="{}")
+    artifact_parser.set_defaults(func=cmd_add_artifact)
+
+    hypothesis_parser = subparsers.add_parser("set-hypothesis")
+    hypothesis_parser.add_argument("--mission-dir", required=True)
+    hypothesis_parser.add_argument("--value", required=True)
+    hypothesis_parser.set_defaults(func=cmd_set_hypothesis)
+
+    suggest_parser = subparsers.add_parser("suggest-seeds")
+    suggest_parser.add_argument("--mission-dir", required=True)
+    suggest_parser.set_defaults(func=cmd_suggest_seeds)
+
+    finish_parser = subparsers.add_parser("finish")
+    finish_parser.add_argument("--mission-dir", required=True)
+    finish_parser.add_argument("--status", default="success")
+    finish_parser.add_argument("--summary", default="")
+    finish_parser.add_argument("--report-path", default="")
+    finish_parser.add_argument("--metadata-json", default="{}")
+    finish_parser.set_defaults(func=cmd_finish)
 
     return parser
 

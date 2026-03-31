@@ -19,14 +19,18 @@
         'Select-GhidraReBridgeSession',
         'Open-GhidraReBridge',
         'Close-GhidraReBridge',
+        'Close-GhidraReAllBridges',
         'Get-GhidraReCurrentContext',
+        'Get-GhidraReBridgeSnapshot',
         'Search-GhidraReFunctions',
         'Invoke-GhidraReAnalyzeTarget',
         'Trace-GhidraReSelector',
         'Start-GhidraReMission',
         'Get-GhidraReMissionStatus',
         'Trace-GhidraReMission',
-        'Get-GhidraReMissionReport'
+        'Get-GhidraReMissionReport',
+        'Complete-GhidraReMission',
+        'Start-GhidraReAutopilot'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

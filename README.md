@@ -1,12 +1,13 @@
 # ghidra-re
 
-`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
+`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS and Windows, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
 
 ## What it includes
 
 - Headless import and analysis helpers
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
 - A multi-session live Ghidra bridge registry for several open targets at once
+- Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
 - Function dossiers, write-back helpers, and optional bug-hunt overlays
 - A live Ghidra bridge extension for navigation, decompilation, comments, renames, and controlled program surgery
@@ -138,7 +139,9 @@ If you are preparing a Windows share package on another machine and already have
   target=/absolute/path/to/binary \
   target=existing_project:FrameworkName
 ./scripts/ghidra_mission_trace my_mission seed=selector:initWithCoder:
+./scripts/ghidra_mission_autopilot my_mission rounds=2
 ./scripts/ghidra_mission_report my_mission
+./scripts/ghidra_mission_finish my_mission
 ```
 
 For a focused single-target session, the fastest interactive loop is usually:
@@ -150,6 +153,7 @@ For a focused single-target session, the fastest interactive loop is usually:
 ./scripts/ghidra_bridge_functions_search 'SomeFunctionName'
 ./scripts/ghidra_bridge_analyze_target 'SomeFunctionName'
 ./scripts/ghidra_bridge_selector_trace 'someSelector:'
+./scripts/ghidra_bridge_snapshot
 ```
 
 For a live multi-target session, start with the registry:
@@ -175,3 +179,5 @@ The optional bug-hunt layer is still there when you want it:
 - The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.
 - The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass, and now supports selecting among multiple live targets.
 - The Windows desktop installer also installs a user PowerShell module so day-to-day Windows use does not have to start in Git Bash.
+- `ghidra_mission_finish` closes the mission's live Ghidra sessions by default, and `ghidra_bridge_close_all all=true` is the emergency cleanup button when you want every bridge-managed Ghidra window gone.
+- `ghidra_polish_release` is the explicit pre-testing pass for syntax, builders, bridge buildability, and packaging.

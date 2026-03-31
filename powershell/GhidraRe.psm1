@@ -192,6 +192,24 @@ function Close-GhidraReBridge {
     Invoke-GhidraReScript -ScriptName "ghidra_bridge_close" -Arguments $args -SkillRoot $SkillRoot -RawOutput
 }
 
+function Close-GhidraReAllBridges {
+    [CmdletBinding()]
+    param(
+        [string]$MissionName,
+        [switch]$All,
+        [string]$SkillRoot
+    )
+
+    $args = @()
+    if ($MissionName) {
+        $args += "mission=$MissionName"
+    }
+    if ($All) {
+        $args += "all=true"
+    }
+    Invoke-GhidraReScript -ScriptName "ghidra_bridge_close_all" -Arguments $args -SkillRoot $SkillRoot
+}
+
 function Get-GhidraReCurrentContext {
     [CmdletBinding()]
     param(
@@ -207,6 +225,23 @@ function Get-GhidraReCurrentContext {
     if ($Program) { $args += "program=$Program" }
 
     Invoke-GhidraReScript -ScriptName "ghidra_bridge_current_context" -Arguments $args -SkillRoot $SkillRoot
+}
+
+function Get-GhidraReBridgeSnapshot {
+    [CmdletBinding()]
+    param(
+        [string]$Session,
+        [string]$Project,
+        [string]$Program,
+        [string]$SkillRoot
+    )
+
+    $args = @()
+    if ($Session) { $args += "session=$Session" }
+    if ($Project) { $args += "project=$Project" }
+    if ($Program) { $args += "program=$Program" }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_bridge_snapshot" -Arguments $args -SkillRoot $SkillRoot
 }
 
 function Search-GhidraReFunctions {
@@ -346,6 +381,50 @@ function Get-GhidraReMissionReport {
     return $result
 }
 
+function Complete-GhidraReMission {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [switch]$CloseAll,
+        [switch]$KeepSessionsOpen,
+        [string]$Summary,
+        [string]$SkillRoot
+    )
+
+    $args = @($Name)
+    if ($CloseAll) { $args += "all=true" }
+    if ($KeepSessionsOpen) { $args += "keep_sessions_open=true" }
+    if ($Summary) { $args += "summary=$Summary" }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_mission_finish" -Arguments $args -SkillRoot $SkillRoot -RawOutput
+}
+
+function Start-GhidraReAutopilot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [int]$Rounds = 3,
+        [int]$LimitTargets = 3,
+        [int]$TraceLimit = 5,
+        [string[]]$Seed = @(),
+        [string[]]$Target = @(),
+        [string]$SkillRoot
+    )
+
+    $args = @($Name, "rounds=$Rounds", "limit_targets=$LimitTargets", "trace_limit=$TraceLimit")
+    foreach ($item in $Seed) {
+        $args += "seed=$item"
+    }
+    foreach ($item in $Target) {
+        $args += "target=$item"
+    }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_mission_autopilot" -Arguments $args -SkillRoot $SkillRoot -RawOutput | Out-Null
+    Get-GhidraReMissionStatus -Name $Name -SkillRoot $SkillRoot
+}
+
 Export-ModuleMember -Function @(
     "Initialize-GhidraRe",
     "Invoke-GhidraReDoctor",
@@ -358,12 +437,16 @@ Export-ModuleMember -Function @(
     "Select-GhidraReBridgeSession",
     "Open-GhidraReBridge",
     "Close-GhidraReBridge",
+    "Close-GhidraReAllBridges",
     "Get-GhidraReCurrentContext",
+    "Get-GhidraReBridgeSnapshot",
     "Search-GhidraReFunctions",
     "Invoke-GhidraReAnalyzeTarget",
     "Trace-GhidraReSelector",
     "Start-GhidraReMission",
     "Get-GhidraReMissionStatus",
     "Trace-GhidraReMission",
-    "Get-GhidraReMissionReport"
+    "Get-GhidraReMissionReport",
+    "Complete-GhidraReMission",
+    "Start-GhidraReAutopilot"
 )
