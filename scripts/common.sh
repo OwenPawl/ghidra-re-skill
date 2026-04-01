@@ -412,7 +412,7 @@ ghidra_re_join_script_paths() {
     [[ -z "$path" ]] && continue
     if ghidra_re_platform_is_windows && command -v cygpath >/dev/null 2>&1; then
       case "$path" in
-        /[A-Za-z]/*|./*|../*|~/*)
+        /*|.*|~*)
           path="$(cygpath -aw "$path" 2>/dev/null || printf '%s' "$path")"
           ;;
       esac
