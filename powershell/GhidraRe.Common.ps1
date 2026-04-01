@@ -45,10 +45,14 @@ function Resolve-GhidraReSkillRoot {
 
 function Find-GhidraReBash {
     $candidates = @(
-        (Get-Command bash.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }),
         "C:\Program Files\Git\bin\bash.exe",
-        "C:\Program Files\Git\usr\bin\bash.exe"
-    ) | Where-Object { $_ -and (Test-Path $_) }
+        "C:\Program Files\Git\usr\bin\bash.exe",
+        (Get-Command bash.exe -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Where-Object {
+            $_ -and
+            $_ -notmatch '\\Windows\\System32\\bash\.exe$' -and
+            $_ -notmatch '\\Microsoft\\WindowsApps\\bash\.exe$'
+        })
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
     return ($candidates | Select-Object -First 1)
 }
