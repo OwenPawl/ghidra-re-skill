@@ -35,6 +35,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_mission_autopilot <mission_name> [rounds=3]`
 7. Read the mission report:
    - `scripts/ghidra_mission_report <mission_name>`
+   - `scripts/ghidra_mission_report <mission_name> format=casefile`
 8. Finish the mission and close its live Ghidra sessions unless you explicitly keep them open:
    - `scripts/ghidra_mission_finish <mission_name>`
 9. For a single target, import and analyze into a dedicated project:
@@ -100,7 +101,9 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - Mission runs are notes-only by default. They do not rename symbols, comment programs, or patch bytes unless you explicitly call the existing write wrappers outside the mission flow.
 - `scripts/ghidra_mission_trace` uses the investigation graph first, then live bridge helpers like `functions/search`, `analyze/target`, and `selector-trace`.
 - `scripts/ghidra_mission_autopilot` extends that loop by choosing the next seed from configured seeds, graph-derived suggestions, and recent analysis notes, then capturing a live bridge snapshot back into the mission artifacts.
+- Autopilot seed ranking now prefers higher-signal graph functions, configured seeds, current-hypothesis targets, and preferred targets that have not been explored yet.
 - `scripts/ghidra_mission_finish` is the default closeout path. It renders the report, records the closeout in the mission metadata, and closes the mission's bridge-managed Ghidra sessions unless `keep_sessions_open=true`.
+- Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` as a cleaner analyst closeout bundle.
 
 ### 3) Use the Apple export bundle first
 - Run `scripts/ghidra_export_apple_bundle` after import unless the user only wants a narrow script run.
@@ -133,6 +136,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.
 - `scripts/ghidra_bridge_call` is the raw HTTP wrapper; prefer the convenience wrappers for common tasks.
 - `scripts/ghidra_bridge_snapshot` captures the current live session, function, decompile, references, and variables in one machine-readable artifact for later ingestion or notes.
+- Bridge snapshots now try to resolve the containing function from the current address, so mid-function cursor positions still produce a useful decompile/references bundle.
 - Most live bridge wrappers accept optional `session=<id>`, `project=<name>`, or `program=<name>` selectors.
 - Prefer `project=` or `session=` when duplicate live targets share the same `program_name`.
 - Mutating bridge calls require `write=true`; destructive bridge calls also require `destructive=true`.
@@ -186,6 +190,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_mission_status <mission_name>`
 - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value> [target=project:program]`
 - `scripts/ghidra_mission_report <mission_name> [format=markdown|json|path]`
+- `scripts/ghidra_mission_report <mission_name> [format=markdown|json|path|casefile|casefile-path]`
 - `scripts/ghidra_mission_autopilot <mission_name> [rounds=3] [seed=<kind:value>] [target=project:program]`
 - `scripts/ghidra_mission_finish <mission_name> [all=true] [keep_sessions_open=true]`
 - `scripts/bootstrap [--skip-smoke-test]`

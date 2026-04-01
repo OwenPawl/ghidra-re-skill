@@ -9,6 +9,7 @@
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
+- Smarter autopilot seed ranking, richer live snapshots, and mission case files for closeout
 - Function dossiers, write-back helpers, and optional bug-hunt overlays
 - A live Ghidra bridge extension for navigation, decompilation, comments, renames, and controlled program surgery
 - Share-package builders for handing the skill to another Mac
@@ -141,6 +142,7 @@ If you are preparing a Windows share package on another machine and already have
 ./scripts/ghidra_mission_trace my_mission seed=selector:initWithCoder:
 ./scripts/ghidra_mission_autopilot my_mission rounds=2
 ./scripts/ghidra_mission_report my_mission
+./scripts/ghidra_mission_report my_mission format=casefile
 ./scripts/ghidra_mission_finish my_mission
 ```
 
@@ -155,6 +157,8 @@ For a focused single-target session, the fastest interactive loop is usually:
 ./scripts/ghidra_bridge_selector_trace 'someSelector:'
 ./scripts/ghidra_bridge_snapshot
 ```
+
+`ghidra_bridge_snapshot` now resolves the containing function from the current address when possible, so bridge snapshots stay useful even when the UI is parked mid-function instead of at a clean entry point.
 
 For a live multi-target session, start with the registry:
 
@@ -176,6 +180,7 @@ The optional bug-hunt layer is still there when you want it:
 
 - Real workflow friction and wishlist items are tracked in [use-case-driven-notes.md](./references/use-case-driven-notes.md).
 - Mission workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
+- Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` for analyst-friendly closeout.
 - The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.
 - The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass, and now supports selecting among multiple live targets.
 - The Windows desktop installer also installs a user PowerShell module so day-to-day Windows use does not have to start in Git Bash.
