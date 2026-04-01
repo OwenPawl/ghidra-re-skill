@@ -425,6 +425,115 @@ function Start-GhidraReAutopilot {
     Get-GhidraReMissionStatus -Name $Name -SkillRoot $SkillRoot
 }
 
+function Get-GhidraReNotesStatus {
+    [CmdletBinding()]
+    param(
+        [string]$SkillRoot
+    )
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_status" -SkillRoot $SkillRoot
+}
+
+function Add-GhidraReNote {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Title,
+        [Parameter(Mandatory = $true)]
+        [string]$Body,
+        [string]$Category = "workflow",
+        [string]$Target,
+        [string]$Mission,
+        [string]$Project,
+        [string]$Program,
+        [string]$ProgramPath,
+        [string]$Context,
+        [string]$Platform,
+        [ValidateSet("open", "remediated", "superseded")]
+        [string]$Status = "open",
+        [string]$SkillRoot
+    )
+
+    $args = @(
+        "title=$Title",
+        "body=$Body",
+        "category=$Category",
+        "status=$Status"
+    )
+    if ($Target) { $args += "target=$Target" }
+    if ($Mission) { $args += "mission=$Mission" }
+    if ($Project) { $args += "project=$Project" }
+    if ($Program) { $args += "program=$Program" }
+    if ($ProgramPath) { $args += "program_path=$ProgramPath" }
+    if ($Context) { $args += "context=$Context" }
+    if ($Platform) { $args += "platform=$Platform" }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_add" -Arguments $args -SkillRoot $SkillRoot
+}
+
+function Sync-GhidraReNotes {
+    [CmdletBinding()]
+    param(
+        [string]$SkillRoot
+    )
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_sync" -SkillRoot $SkillRoot
+}
+
+function Receive-GhidraReNotes {
+    [CmdletBinding()]
+    param(
+        [string]$SkillRoot
+    )
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_pull" -SkillRoot $SkillRoot
+}
+
+function Set-GhidraReNoteStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Fingerprint,
+        [string]$Summary,
+        [string]$Title = "Shared note update",
+        [string]$Body,
+        [string]$Category = "workflow",
+        [string]$Target,
+        [ValidateSet("remediated", "superseded")]
+        [string]$Status = "remediated",
+        [string]$SupersededBy,
+        [string]$SkillRoot
+    )
+
+    $args = @(
+        "fingerprint=$Fingerprint",
+        "title=$Title",
+        "category=$Category",
+        "status=$Status"
+    )
+    if ($Summary) { $args += "summary=$Summary" }
+    if ($Body) { $args += "body=$Body" }
+    if ($Target) { $args += "target=$Target" }
+    if ($SupersededBy) { $args += "superseded_by=$SupersededBy" }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_remediate" -Arguments $args -SkillRoot $SkillRoot
+}
+
+function Open-GhidraReSharedNotes {
+    [CmdletBinding()]
+    param(
+        [switch]$Browse,
+        [string]$SkillRoot
+    )
+
+    $args = @()
+    if ($Browse) {
+        $args += "browse=true"
+    }
+
+    Invoke-GhidraReScript -ScriptName "ghidra_notes_open_shared" -Arguments $args -SkillRoot $SkillRoot -RawOutput
+}
+
 Export-ModuleMember -Function @(
     "Initialize-GhidraRe",
     "Invoke-GhidraReDoctor",
@@ -448,5 +557,11 @@ Export-ModuleMember -Function @(
     "Trace-GhidraReMission",
     "Get-GhidraReMissionReport",
     "Complete-GhidraReMission",
-    "Start-GhidraReAutopilot"
+    "Start-GhidraReAutopilot",
+    "Get-GhidraReNotesStatus",
+    "Add-GhidraReNote",
+    "Sync-GhidraReNotes",
+    "Receive-GhidraReNotes",
+    "Set-GhidraReNoteStatus",
+    "Open-GhidraReSharedNotes"
 )

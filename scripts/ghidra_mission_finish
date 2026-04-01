@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: ghidra_mission_finish <mission_name> [all=true] [keep_sessions_open=true] [summary=...]
+Usage: ghidra_mission_finish <mission_name> [all=true] [keep_sessions_open=true] [summary=...] [shared_note_title=...] [shared_note_body=...]
 EOF
 }
 
@@ -22,6 +22,11 @@ shift
 all_flag=false
 keep_sessions_open=false
 summary=""
+shared_note_title=""
+shared_note_body=""
+shared_note_category="workflow"
+shared_note_target=""
+shared_note_status="open"
 
 for arg in "$@"; do
   case "$arg" in
@@ -44,6 +49,21 @@ for arg in "$@"; do
       ;;
     note=*)
       summary="${arg#note=}"
+      ;;
+    shared_note_title=*)
+      shared_note_title="${arg#shared_note_title=}"
+      ;;
+    shared_note_body=*)
+      shared_note_body="${arg#shared_note_body=}"
+      ;;
+    shared_note_category=*)
+      shared_note_category="${arg#shared_note_category=}"
+      ;;
+    shared_note_target=*)
+      shared_note_target="${arg#shared_note_target=}"
+      ;;
+    shared_note_status=*)
+      shared_note_status="${arg#shared_note_status=}"
       ;;
     -h|--help)
       usage
@@ -113,12 +133,28 @@ if [[ "$failed_count" != "0" ]]; then
   status="partial"
 fi
 
+if [[ -n "$shared_note_title" && -z "$shared_note_body" ]]; then
+  shared_note_body="$summary"
+fi
+
 python3 "$(ghidra_re_mission_backend)" finish \
   --mission-dir "$mission_dir" \
   --status "$status" \
   --summary "$summary" \
   --report-path "$report_path" \
   --metadata-json "$metadata_json" >/dev/null
+
+if [[ -n "$shared_note_title" && -n "$shared_note_body" ]]; then
+  note_target="$shared_note_target"
+  [[ -n "$note_target" ]] || note_target="$mission_name"
+  "$SCRIPT_DIR/ghidra_notes_add" \
+    "title=$shared_note_title" \
+    "body=$shared_note_body" \
+    "category=$shared_note_category" \
+    "target=$note_target" \
+    "mission=$mission_name" \
+    "status=$shared_note_status" >/dev/null || true
+fi
 
 printf 'Mission finished: %s\n' "$mission_name"
 printf 'Report: %s\n' "$report_path"
@@ -132,4 +168,3 @@ print(payload.get("closed_count", 0))
 PY
 )"
 fi
-

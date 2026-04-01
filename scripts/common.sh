@@ -65,6 +65,18 @@ GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE="${GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE:-$G
 GHIDRA_RE_BRIDGE_SESSION_FILE="${GHIDRA_RE_BRIDGE_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CURRENT_FILE}"
 GHIDRA_RE_BRIDGE_CONTROL_FILE="${GHIDRA_RE_BRIDGE_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE}"
 GHIDRA_RE_SOURCE_REGISTRY_FILE="${GHIDRA_RE_SOURCE_REGISTRY_FILE:-$GHIDRA_RE_CONFIG_HOME/sources.json}"
+GHIDRA_NOTES_ENABLE_SHARED="${GHIDRA_NOTES_ENABLE_SHARED:-1}"
+GHIDRA_NOTES_AUTO_SYNC="${GHIDRA_NOTES_AUTO_SYNC:-1}"
+GHIDRA_NOTES_REPO="${GHIDRA_NOTES_REPO:-OwenPawl/ghidra-re-skill}"
+GHIDRA_NOTES_ISSUE_TITLE="${GHIDRA_NOTES_ISSUE_TITLE:-Global Use-Case Driven Notes}"
+GHIDRA_NOTES_ISSUE_NUMBER="${GHIDRA_NOTES_ISSUE_NUMBER:-5}"
+GHIDRA_NOTES_ROOT="${GHIDRA_NOTES_ROOT:-$GHIDRA_RE_CONFIG_HOME/shared-notes}"
+GHIDRA_NOTES_CONFIG_FILE="${GHIDRA_NOTES_CONFIG_FILE:-$GHIDRA_NOTES_ROOT/config.json}"
+GHIDRA_NOTES_QUEUE_DIR="${GHIDRA_NOTES_QUEUE_DIR:-$GHIDRA_NOTES_ROOT/queue}"
+GHIDRA_NOTES_CACHE_DIR="${GHIDRA_NOTES_CACHE_DIR:-$GHIDRA_NOTES_ROOT/cache}"
+GHIDRA_NOTES_STATE_FILE="${GHIDRA_NOTES_STATE_FILE:-$GHIDRA_NOTES_ROOT/state.json}"
+GHIDRA_NOTES_CACHE_JSON="${GHIDRA_NOTES_CACHE_JSON:-$GHIDRA_NOTES_CACHE_DIR/notes.json}"
+GHIDRA_NOTES_CACHE_MD="${GHIDRA_NOTES_CACHE_MD:-$GHIDRA_NOTES_CACHE_DIR/issue.md}"
 
 GHIDRA_DEFAULT_SCRIPT_DIRS=(
   "$GHIDRA_CUSTOM_SCRIPTS_DIR"
@@ -253,6 +265,147 @@ ghidra_re_detect_jdk_dir() {
 
 ghidra_re_ensure_workspace() {
   mkdir -p "$GHIDRA_PROJECTS_DIR" "$GHIDRA_EXPORTS_DIR" "$GHIDRA_LOGS_DIR" "$GHIDRA_INVESTIGATIONS_DIR" "$GHIDRA_SOURCES_CACHE_DIR"
+}
+
+ghidra_re_has_gh_cli() {
+  command -v gh >/dev/null 2>&1
+}
+
+ghidra_re_gh_authenticated() {
+  ghidra_re_has_gh_cli && gh auth status >/dev/null 2>&1
+}
+
+ghidra_re_skill_version() {
+  if command -v git >/dev/null 2>&1 && [[ -d "$GHIDRA_RE_ROOT/.git" ]]; then
+    git -C "$GHIDRA_RE_ROOT" rev-parse --short HEAD 2>/dev/null && return 0
+  fi
+  printf 'unknown\n'
+}
+
+ghidra_re_notes_enabled() {
+  ghidra_re_flag_enabled "$GHIDRA_NOTES_ENABLE_SHARED"
+}
+
+ghidra_re_notes_auto_sync_enabled() {
+  ghidra_re_flag_enabled "$GHIDRA_NOTES_AUTO_SYNC"
+}
+
+ghidra_re_notes_issue_url() {
+  if [[ -n "${GHIDRA_NOTES_ISSUE_NUMBER:-}" ]]; then
+    printf 'https://github.com/%s/issues/%s\n' "$GHIDRA_NOTES_REPO" "$GHIDRA_NOTES_ISSUE_NUMBER"
+    return 0
+  fi
+  return 1
+}
+
+ghidra_re_notes_ensure_dirs() {
+  mkdir -p "$GHIDRA_NOTES_ROOT" "$GHIDRA_NOTES_QUEUE_DIR" "$GHIDRA_NOTES_CACHE_DIR"
+}
+
+ghidra_re_notes_backend() {
+  printf '%s/scripts/ghidra_notes_backend.py' "$GHIDRA_RE_ROOT"
+}
+
+ghidra_re_notes_init_files() {
+  local python_cmd=""
+  python_cmd="$(ghidra_re_python)" || ghidra_re_die "python is required for shared notes support"
+  ghidra_re_notes_ensure_dirs
+  if [[ ! -f "$GHIDRA_NOTES_CONFIG_FILE" ]]; then
+    "$python_cmd" - "$GHIDRA_NOTES_CONFIG_FILE" "$GHIDRA_NOTES_REPO" "$GHIDRA_NOTES_ISSUE_TITLE" "$GHIDRA_NOTES_ISSUE_NUMBER" "$GHIDRA_NOTES_ENABLE_SHARED" "$GHIDRA_NOTES_AUTO_SYNC" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "version": 1,
+    "repo": sys.argv[2],
+    "issue_title": sys.argv[3],
+    "issue_number": sys.argv[4],
+    "issue_url": f"https://github.com/{sys.argv[2]}/issues/{sys.argv[4]}" if sys.argv[4] else "",
+    "enabled": sys.argv[5] not in {"0", "false", "no", "off"},
+    "auto_sync": sys.argv[6] not in {"0", "false", "no", "off"},
+}
+path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+  fi
+  if [[ ! -f "$GHIDRA_NOTES_STATE_FILE" ]]; then
+    "$python_cmd" - "$GHIDRA_NOTES_STATE_FILE" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "version": 1,
+    "last_sync_at": "",
+    "last_pull_at": "",
+    "last_error": "",
+    "pending_queue_count": 0,
+    "issue_url": "",
+    "issue_number": "",
+}
+path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+  fi
+  if [[ ! -f "$GHIDRA_NOTES_CACHE_JSON" ]]; then
+    "$python_cmd" - "$GHIDRA_NOTES_CACHE_JSON" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+payload = {"version": 1, "notes": [], "recently_seen": []}
+path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+  fi
+  if [[ ! -f "$GHIDRA_NOTES_CACHE_MD" ]]; then
+    printf '# Shared Use-Case Notes\n\nNo shared notes have been pulled yet.\n' >"$GHIDRA_NOTES_CACHE_MD"
+  fi
+}
+
+ghidra_re_notes_queue_count() {
+  ghidra_re_notes_ensure_dirs
+  find "$GHIDRA_NOTES_QUEUE_DIR" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '
+}
+
+ghidra_re_notes_current_context_json() {
+  local python_cmd=""
+  local session_file=""
+  python_cmd="$(ghidra_re_python)" || ghidra_re_die "python is required for shared notes support"
+  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  "$python_cmd" - "$session_file" "$GHIDRA_RE_PLATFORM" "$GHIDRA_RE_ROOT" <<'PY'
+import json, pathlib, subprocess, sys
+
+session_file = sys.argv[1]
+platform = sys.argv[2]
+skill_root = pathlib.Path(sys.argv[3])
+
+payload = {
+    "platform": platform or "unknown",
+    "skill_version": "unknown",
+    "context_mode": "headless",
+    "mission_name": "",
+    "project_name": "",
+    "program_name": "",
+    "program_path": "",
+    "session_id": "",
+}
+
+if (skill_root / ".git").exists():
+    try:
+        payload["skill_version"] = subprocess.check_output(
+            ["git", "-C", str(skill_root), "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip() or "unknown"
+    except Exception:
+        pass
+
+if session_file and pathlib.Path(session_file).is_file():
+    try:
+        session = json.loads(pathlib.Path(session_file).read_text(encoding="utf-8"))
+        payload["context_mode"] = "live"
+        payload["project_name"] = session.get("project_name", "")
+        payload["program_name"] = session.get("program_name", "")
+        payload["program_path"] = session.get("program_path", "")
+        payload["session_id"] = session.get("session_id", "")
+    except Exception:
+        pass
+
+print(json.dumps(payload))
+PY
 }
 
 ghidra_re_timestamp() {

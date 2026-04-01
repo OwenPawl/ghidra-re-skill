@@ -1,6 +1,14 @@
 # Use-Case Driven Notes
 
-This file captures friction, missing features, and quality-of-life improvements discovered while using `ghidra-re` on real targets. Add short dated notes here during or immediately after a workflow so future skill work stays grounded in actual reverse-engineering use.
+This file captures representative friction, missing features, and quality-of-life improvements discovered while using `ghidra-re` on real targets.
+
+It is now legacy/reference-only. Day-to-day note capture should go through the GitHub-backed shared-notes flow:
+
+- `scripts/ghidra_notes_add`
+- `scripts/ghidra_notes_sync`
+- `scripts/ghidra_notes_pull`
+
+That shared issue is the canonical live backlog for the public skill. This Markdown file remains useful as sample/history inside the repo.
 
 ## 2026-03-30 - WorkflowKit
 

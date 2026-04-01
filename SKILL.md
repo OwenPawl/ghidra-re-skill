@@ -50,12 +50,15 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_apply_finding <project_name> <program_name> function=... title=... comment=...`
 14. Run an extra script when needed:
    - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
--15. Append any friction or missing-feature notes to `references/use-case-driven-notes.md` before you wrap up the session.
--16. Open the project in the GUI:
+15. Record any friction or missing-feature notes through the shared notes flow before you wrap up the session:
+   - `scripts/ghidra_notes_add title=... body=... category=workflow`
+   - `scripts/ghidra_notes_status`
+   - `scripts/ghidra_notes_open_shared`
+16. Open the project in the GUI:
    - `scripts/ghidra_open_gui <project_name> [program_name]`
--17. Arm or reuse the live bridge when you want an interactive RE loop:
+17. Arm or reuse the live bridge when you want an interactive RE loop:
    - `scripts/ghidra_bridge_open <project_name> [program_name]`
--18. Use the live bridge wrappers for inspection or edits:
+18. Use the live bridge wrappers for inspection or edits:
    - `scripts/ghidra_bridge_current_context`
    - `scripts/ghidra_bridge_snapshot`
    - `scripts/ghidra_bridge_analyze_target <query>`
@@ -67,11 +70,11 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_bridge_comment ...`
    - `scripts/ghidra_bridge_patch_bytes ...`
    - `scripts/ghidra_bridge_patch_instruction ...`
--19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
+19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
    - `scripts/build_mac_desktop_share_package [output_zip]`
--20. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
+20. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
    - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
--21. On Windows, optionally import the native module after install:
+21. On Windows, optionally import the native module after install:
    - `Import-Module GhidraRe`
    - `Get-GhidraReBridgeSessions`
    - `Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/.../WorkflowKit'`
@@ -103,6 +106,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - `scripts/ghidra_mission_autopilot` extends that loop by choosing the next seed from configured seeds, graph-derived suggestions, and recent analysis notes, then capturing a live bridge snapshot back into the mission artifacts.
 - Autopilot seed ranking now prefers higher-signal graph functions, configured seeds, current-hypothesis targets, and preferred targets that have not been explored yet.
 - `scripts/ghidra_mission_finish` is the default closeout path. It renders the report, records the closeout in the mission metadata, and closes the mission's bridge-managed Ghidra sessions unless `keep_sessions_open=true`.
+- `scripts/ghidra_mission_finish` can also forward a discovered workflow-friction note into the shared GitHub-backed notes backlog with `shared_note_title=...` and `shared_note_body=...`.
 - Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` as a cleaner analyst closeout bundle.
 
 ### 3) Use the Apple export bundle first
@@ -119,7 +123,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - Run `scripts/ghidra_export_bug_hunt_bundle` when the task is bug hunting, boundary analysis, or userland trust-boundary triage.
 - Use `scripts/ghidra_function_dossier` on the top-ranked candidate paths before decompiling functions ad hoc.
 - Use `scripts/ghidra_apply_finding` only when you want to write comments, bookmarks, or renames back into the project.
-- Append dated notes to `references/use-case-driven-notes.md` whenever the workflow exposes missing features, confusing outputs, or repetitive manual steps.
+- Use `scripts/ghidra_notes_add` whenever the workflow exposes missing features, confusing outputs, or repetitive manual steps. The GitHub-backed shared issue is now the canonical community backlog; `references/use-case-driven-notes.md` is legacy/reference-only.
 - `DecompileFunction.java` for on-demand decompilation
 - `ExportXrefs.java` for targeted xref tracing
 - `ExportAppleBundle.java` when you want the full structured export outside the convenience wrapper
@@ -193,6 +197,12 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_mission_report <mission_name> [format=markdown|json|path|casefile|casefile-path]`
 - `scripts/ghidra_mission_autopilot <mission_name> [rounds=3] [seed=<kind:value>] [target=project:program]`
 - `scripts/ghidra_mission_finish <mission_name> [all=true] [keep_sessions_open=true]`
+- `scripts/ghidra_notes_add title=... body=... [category=workflow] [target=...]`
+- `scripts/ghidra_notes_sync`
+- `scripts/ghidra_notes_pull`
+- `scripts/ghidra_notes_status`
+- `scripts/ghidra_notes_remediate fingerprint=... [summary=...]`
+- `scripts/ghidra_notes_open_shared [browse=true]`
 - `scripts/bootstrap [--skip-smoke-test]`
 - `scripts/doctor`
 - `scripts/ghidra_polish_release [mode=quick|release]`
@@ -243,4 +253,4 @@ Read only what you need:
 - Bug-hunt output bundle details: `references/bug-hunt-outputs.md`
 - Bug-hunt heuristics and categories: `references/bug-hunt-patterns.json`
 - Built-in script caveats: `references/builtins.md`
-- Use-case-driven skill improvement notes: `references/use-case-driven-notes.md`
+- Use-case-driven skill improvement notes: shared via the GitHub-backed notes commands above; `references/use-case-driven-notes.md` is legacy/reference history inside the repo

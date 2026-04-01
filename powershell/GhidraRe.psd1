@@ -30,7 +30,13 @@
         'Trace-GhidraReMission',
         'Get-GhidraReMissionReport',
         'Complete-GhidraReMission',
-        'Start-GhidraReAutopilot'
+        'Start-GhidraReAutopilot',
+        'Get-GhidraReNotesStatus',
+        'Add-GhidraReNote',
+        'Sync-GhidraReNotes',
+        'Receive-GhidraReNotes',
+        'Set-GhidraReNoteStatus',
+        'Open-GhidraReSharedNotes'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

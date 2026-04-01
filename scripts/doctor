@@ -67,6 +67,9 @@ show_candidate "Detected Ghidra candidate" "$detected_ghidra"
 show_candidate "Detected JDK candidate" "$detected_jdk"
 show_candidate "Detected Python" "$python_cmd"
 show_candidate "Detected Bash" "$bash_cmd"
+show_candidate "Shared notes repo" "$GHIDRA_NOTES_REPO"
+show_candidate "Shared notes issue number" "${GHIDRA_NOTES_ISSUE_NUMBER:-}"
+show_candidate "Shared notes root" "$GHIDRA_NOTES_ROOT"
 
 for path in \
   "$GHIDRA_WORKSPACE" \
@@ -80,6 +83,22 @@ do
     record_ok "Directory exists" "$path"
   else
     record_warn "Directory missing" "$path"
+  fi
+done
+
+for notes_asset in \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_add" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_sync" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_pull" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_status" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_remediate" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_open_shared" \
+  "$GHIDRA_RE_ROOT/scripts/ghidra_notes_backend.py"
+do
+  if [[ -f "$notes_asset" ]]; then
+    record_ok "Shared-notes asset present" "$notes_asset"
+  else
+    record_warn "Shared-notes asset missing" "$notes_asset"
   fi
 done
 
@@ -151,6 +170,27 @@ if [[ -f "$GHIDRA_RE_SOURCE_REGISTRY_FILE" ]]; then
   record_ok "Source registry" "$GHIDRA_RE_SOURCE_REGISTRY_FILE"
 else
   show_candidate "Source registry" "$GHIDRA_RE_SOURCE_REGISTRY_FILE"
+fi
+
+ghidra_re_notes_init_files
+if [[ -f "$GHIDRA_NOTES_CONFIG_FILE" ]]; then
+  record_ok "Shared-notes config" "$GHIDRA_NOTES_CONFIG_FILE"
+else
+  record_warn "Shared-notes config" "$GHIDRA_NOTES_CONFIG_FILE"
+fi
+if [[ -f "$GHIDRA_NOTES_STATE_FILE" ]]; then
+  record_ok "Shared-notes state" "$GHIDRA_NOTES_STATE_FILE"
+else
+  record_warn "Shared-notes state" "$GHIDRA_NOTES_STATE_FILE"
+fi
+if ghidra_re_has_gh_cli; then
+  if ghidra_re_gh_authenticated; then
+    record_ok "GitHub CLI auth" "authenticated"
+  else
+    record_warn "GitHub CLI auth" "gh is installed but not authenticated"
+  fi
+else
+  record_warn "GitHub CLI auth" "gh is not installed"
 fi
 
 printf '\n'

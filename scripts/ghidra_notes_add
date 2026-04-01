@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_notes_add title=... body=... [category=workflow] [target=...] [mission=...] [project=...] [program=...]
+EOF
+}
+
+title=""
+body=""
+category="workflow"
+target=""
+mission_name=""
+project_name=""
+program_name=""
+program_path=""
+context_mode=""
+platform=""
+status="open"
+
+for arg in "$@"; do
+  case "$arg" in
+    title=*) title="${arg#title=}" ;;
+    body=*) body="${arg#body=}" ;;
+    category=*) category="${arg#category=}" ;;
+    target=*) target="${arg#target=}" ;;
+    mission=*) mission_name="${arg#mission=}" ;;
+    project=*) project_name="${arg#project=}" ;;
+    program=*) program_name="${arg#program=}" ;;
+    program_path=*) program_path="${arg#program_path=}" ;;
+    context=*) context_mode="${arg#context=}" ;;
+    platform=*) platform="${arg#platform=}" ;;
+    status=*) status="${arg#status=}" ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+[[ -n "$title" && -n "$body" ]] || {
+  usage >&2
+  ghidra_re_die "title=... and body=... are required"
+}
+
+ghidra_re_notes_init_files
+
+context_json="$(ghidra_re_notes_current_context_json)"
+
+session_metadata_json="$("$(ghidra_re_python)" - "$context_json" "$mission_name" "$project_name" "$program_name" "$program_path" "$context_mode" <<'PY'
+import json, sys
+
+context = json.loads(sys.argv[1])
+mission_name, project_name, program_name, program_path, context_mode = sys.argv[2:7]
+
+metadata = {
+    "mission_name": mission_name or context.get("mission_name", ""),
+    "project_name": project_name or context.get("project_name", ""),
+    "program_name": program_name or context.get("program_name", ""),
+    "program_path": program_path or context.get("program_path", ""),
+    "context_mode": context_mode or context.get("context_mode", ""),
+    "session_id": context.get("session_id", ""),
+}
+print(json.dumps(metadata))
+PY
+)"
+
+target_value="$target"
+if [[ -z "$target_value" ]]; then
+  target_value="$("$(ghidra_re_python)" - "$session_metadata_json" <<'PY'
+import json, sys
+metadata = json.loads(sys.argv[1])
+project = metadata.get("project_name", "")
+program = metadata.get("program_name", "")
+program_path = metadata.get("program_path", "")
+if project and program:
+    print(f"{project}:{program}")
+elif program_path:
+    print(program_path)
+else:
+    print("")
+PY
+)"
+fi
+
+platform_value="${platform:-$GHIDRA_RE_PLATFORM}"
+skill_version="$(ghidra_re_skill_version)"
+add_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-add.XXXXXX.json")"
+sync_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-sync.XXXXXX.json")"
+
+cleanup() {
+  rm -f "$add_file" "$sync_file"
+}
+trap cleanup EXIT
+
+python3 "$(ghidra_re_notes_backend)" add \
+  --config-file "$GHIDRA_NOTES_CONFIG_FILE" \
+  --state-file "$GHIDRA_NOTES_STATE_FILE" \
+  --queue-dir "$GHIDRA_NOTES_QUEUE_DIR" \
+  --event-kind observe \
+  --title "$title" \
+  --body "$body" \
+  --category "$category" \
+  --target "$target_value" \
+  --platform "$platform_value" \
+  --skill-version "$skill_version" \
+  --status "$status" \
+  --session-metadata-json "$session_metadata_json" >"$add_file"
+
+if ghidra_re_notes_enabled && ghidra_re_notes_auto_sync_enabled && ghidra_re_gh_authenticated; then
+  if "$SCRIPT_DIR/ghidra_notes_sync" >"$sync_file" 2>/dev/null; then
+    python3 - "$add_file" "$sync_file" <<'PY'
+import json, pathlib, sys
+added = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+synced = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+added["synced"] = True
+added["sync"] = synced
+print(json.dumps(added, indent=2))
+PY
+  else
+    python3 - "$add_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+payload["synced"] = False
+payload["warning"] = "note queued locally but auto-sync failed"
+print(json.dumps(payload, indent=2))
+PY
+  fi
+else
+  python3 - "$add_file" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+payload["synced"] = False
+print(json.dumps(payload, indent=2))
+PY
+fi

@@ -23,6 +23,26 @@
 - [references](./references): notes, schemas, and heuristics
 - [agents/openai.yaml](./agents/openai.yaml): skill metadata for Codex discovery
 
+## Shared notes
+
+`ghidra-re` now has a GitHub-backed global use-case notes system.
+
+- Canonical public backlog: one GitHub issue in `OwenPawl/ghidra-re-skill`
+- Local resilience layer: `~/.config/ghidra-re/shared-notes/`
+- Write path: structured local queue first, then sync to GitHub when `gh` is authenticated
+
+The main commands are:
+
+```bash
+./scripts/ghidra_notes_status
+./scripts/ghidra_notes_add title='Missing live-export ingest' body='Baseline export still requires close/reopen for an already-open target.' category=workflow target=workflowkit_bug_smoke:WorkflowKit
+./scripts/ghidra_notes_sync
+./scripts/ghidra_notes_pull
+./scripts/ghidra_notes_open_shared
+```
+
+The old [use-case-driven-notes.md](./references/use-case-driven-notes.md) file is now legacy/reference-only and no longer the canonical live backlog.
+
 ## Quick install
 
 If you already use Codex locally:
@@ -95,6 +115,12 @@ The default local assumptions are:
   - Windows: `/c/Program Files/Eclipse Adoptium/jdk-21`
 - Workspace: `~/ghidra-projects`
 
+Shared-notes defaults:
+
+- Repo: `OwenPawl/ghidra-re-skill`
+- Auto-sync: on when `gh` is authenticated
+- Local queue/cache: `~/.config/ghidra-re/shared-notes/`
+
 ## Windows Apple-target flow
 
 The Windows installer now installs a PowerShell module named `GhidraRe`. After install:
@@ -106,6 +132,16 @@ Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:
 ```
 
 The module is a native PowerShell-facing layer over the same `ghidra-re` scripts, so it feels normal in PowerShell while still reusing the skill's battle-tested Bash workflow underneath.
+
+The shared-notes flow is also available from PowerShell:
+
+```powershell
+Get-GhidraReNotesStatus
+Add-GhidraReNote -Title 'Missing feature' -Body 'Describe the friction here.'
+Sync-GhidraReNotes
+Receive-GhidraReNotes
+Open-GhidraReSharedNotes
+```
 
 If you prefer Bash directly, the source-backed Apple flow is still:
 
@@ -143,7 +179,7 @@ If you are preparing a Windows share package on another machine and already have
 ./scripts/ghidra_mission_autopilot my_mission rounds=2
 ./scripts/ghidra_mission_report my_mission
 ./scripts/ghidra_mission_report my_mission format=casefile
-./scripts/ghidra_mission_finish my_mission
+./scripts/ghidra_mission_finish my_mission shared_note_title='Autopilot friction' shared_note_body='Need a better ObjC sender ranking view in live snapshots.'
 ```
 
 For a focused single-target session, the fastest interactive loop is usually:
@@ -178,7 +214,8 @@ The optional bug-hunt layer is still there when you want it:
 
 ## Notes
 
-- Real workflow friction and wishlist items are tracked in [use-case-driven-notes.md](./references/use-case-driven-notes.md).
+- Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.
+- [use-case-driven-notes.md](./references/use-case-driven-notes.md) remains in the repo as legacy/reference history, not the canonical day-to-day write target.
 - Mission workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
 - Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` for analyst-friendly closeout.
 - The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_notes_remediate fingerprint=... [summary=...] [title=...] [body=...] [category=workflow] [target=...] [status=remediated|superseded] [superseded_by=...]
+EOF
+}
+
+fingerprint=""
+summary=""
+title="Shared note update"
+body=""
+category="workflow"
+target=""
+status="remediated"
+superseded_by=""
+
+for arg in "$@"; do
+  case "$arg" in
+    fingerprint=*) fingerprint="${arg#fingerprint=}" ;;
+    summary=*) summary="${arg#summary=}" ;;
+    title=*) title="${arg#title=}" ;;
+    body=*) body="${arg#body=}" ;;
+    category=*) category="${arg#category=}" ;;
+    target=*) target="${arg#target=}" ;;
+    status=*) status="${arg#status=}" ;;
+    superseded_by=*) superseded_by="${arg#superseded_by=}" ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+[[ -n "$fingerprint" ]] || {
+  usage >&2
+  ghidra_re_die "fingerprint=... is required"
+}
+
+ghidra_re_notes_init_files
+
+event_kind="remediate"
+if [[ "$status" == "superseded" ]]; then
+  event_kind="supersede"
+fi
+
+if [[ -z "$body" ]]; then
+  body="$summary"
+fi
+[[ -n "$body" ]] || body="Marked as $status."
+
+context_json="$(ghidra_re_notes_current_context_json)"
+platform_value="$GHIDRA_RE_PLATFORM"
+skill_version="$(ghidra_re_skill_version)"
+
+python3 "$(ghidra_re_notes_backend)" add \
+  --config-file "$GHIDRA_NOTES_CONFIG_FILE" \
+  --state-file "$GHIDRA_NOTES_STATE_FILE" \
+  --queue-dir "$GHIDRA_NOTES_QUEUE_DIR" \
+  --event-kind "$event_kind" \
+  --title "$title" \
+  --body "$body" \
+  --category "$category" \
+  --target "$target" \
+  --platform "$platform_value" \
+  --skill-version "$skill_version" \
+  --status "$status" \
+  --fingerprint "$fingerprint" \
+  --session-metadata-json "$context_json" \
+  --remediation-summary "$summary" \
+  --superseded-by "$superseded_by" >/dev/null
+
+if ghidra_re_notes_enabled && ghidra_re_notes_auto_sync_enabled && ghidra_re_gh_authenticated; then
+  "$SCRIPT_DIR/ghidra_notes_sync"
+else
+  "$SCRIPT_DIR/ghidra_notes_status"
+fi

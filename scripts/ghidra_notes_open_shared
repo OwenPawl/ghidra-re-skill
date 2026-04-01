@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+browse=false
+for arg in "$@"; do
+  case "$arg" in
+    browse=*)
+      case "${arg#browse=}" in
+        true|1|yes|on) browse=true ;;
+        false|0|no|off) browse=false ;;
+        *) ghidra_re_die "unsupported browse= value: ${arg#browse=}" ;;
+      esac
+      ;;
+    *)
+      ghidra_re_die "unsupported argument: $arg"
+      ;;
+  esac
+done
+
+ghidra_re_notes_init_files
+status_json="$("$SCRIPT_DIR/ghidra_notes_status")"
+issue_url="$("$(ghidra_re_python)" - "$status_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+print(payload.get("issue_url", ""))
+PY
+)"
+
+[[ -n "$issue_url" ]] || ghidra_re_die "shared notes issue URL is not configured yet; run ghidra_notes_sync first"
+printf '%s\n' "$issue_url"
+
+if [[ "$browse" == true ]]; then
+  if ghidra_re_platform_is_macos && command -v open >/dev/null 2>&1; then
+    open "$issue_url" >/dev/null 2>&1 || true
+  elif ghidra_re_platform_is_windows && command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe //c start "" "$issue_url" >/dev/null 2>&1 || true
+  fi
+fi

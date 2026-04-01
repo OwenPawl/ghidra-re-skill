@@ -87,7 +87,9 @@ record_check "bash-syntax" bash -lc '
 ' bash "$GHIDRA_RE_ROOT"
 
 record_check "python-compile" python3 -m py_compile "$GHIDRA_RE_ROOT/scripts/ghidra_mission_backend.py"
+record_check "notes-backend-compile" python3 -m py_compile "$GHIDRA_RE_ROOT/scripts/ghidra_notes_backend.py"
 record_check "doctor" "$GHIDRA_RE_ROOT/scripts/doctor"
+record_check "notes-status" "$GHIDRA_RE_ROOT/scripts/ghidra_notes_status"
 record_check "bridge-build" "$GHIDRA_RE_ROOT/scripts/ghidra_bridge_build"
 record_check "share-package" "$GHIDRA_RE_ROOT/scripts/build_share_package" "$tmp_dir/share.zip"
 record_check "windows-share-package" "$GHIDRA_RE_ROOT/scripts/build_windows_desktop_share_package" "$tmp_dir/windows-share.zip"
