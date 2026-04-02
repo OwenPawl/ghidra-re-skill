@@ -114,7 +114,7 @@ $InstallBase = Join-Path $CodexHome "skills"
 $TargetDir = Join-Path $InstallBase "ghidra-re"
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $DefaultGhidraTarget = Join-Path $env:LOCALAPPDATA "Programs\Ghidra"
-$ConfigDir = if ($env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME "ghidra-re" } else { Join-Path $env:USERPROFILE ".config\ghidra-re" }
+$ConfigDir = if ($env:APPDATA) { Join-Path $env:APPDATA "ghidra-re" } else { Join-Path $env:USERPROFILE "AppData\Roaming\ghidra-re" }
 
 function Find-Bash {
   $candidates = @(
@@ -152,31 +152,89 @@ function Ensure-GitBash {
   throw "Git Bash was not found and could not be installed automatically."
 }
 
-function Find-Jdk21 {
+function Test-JdkDir($Path) {
+  if (-not $Path) { return $false }
+  return (Test-Path (Join-Path $Path "bin\java.exe")) -and (Test-Path (Join-Path $Path "bin\javac.exe"))
+}
+
+function Resolve-JdkDirFromCommand($CommandName) {
+  $command = Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $command) { return $null }
+  $item = Get-Item $command.Source -ErrorAction SilentlyContinue
+  if (-not $item) { return $null }
+  $target = if ($item.Target) { @($item.Target)[0] } else { $item.FullName }
+  if (-not [System.IO.Path]::IsPathRooted($target)) {
+    $target = Join-Path (Split-Path $item.FullName -Parent) $target
+  }
+  $candidate = Split-Path (Split-Path $target -Parent) -Parent
+  if (Test-JdkDir $candidate) { return $candidate }
+  return $null
+}
+
+function Find-Jdk {
+  $registryHomes = @()
+  foreach ($root in @("HKLM:\SOFTWARE\JavaSoft\JDK", "HKLM:\SOFTWARE\WOW6432Node\JavaSoft\JDK")) {
+    $rootItem = Get-ItemProperty $root -ErrorAction SilentlyContinue
+    if ($rootItem.CurrentVersion) {
+      $current = Get-ItemProperty (Join-Path $root $rootItem.CurrentVersion) -ErrorAction SilentlyContinue
+      if ($current.JavaHome) {
+        $registryHomes += $current.JavaHome
+      }
+    }
+    $registryHomes += Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+      (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).JavaHome
+    }
+  }
+
   $candidates = @(
+    $env:GHIDRA_JDK,
     $env:JAVA_HOME,
+    (Resolve-JdkDirFromCommand "javac.exe"),
+    (Resolve-JdkDirFromCommand "java.exe"),
     "C:\Program Files\Eclipse Adoptium\jdk-21",
     "C:\Program Files\Java\jdk-21"
-  ) + (Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Filter "jdk-21*" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
-      (Get-ChildItem "C:\Program Files\Java" -Filter "jdk-21*" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-  foreach ($candidate in $candidates) {
-    if ($candidate -and (Test-Path (Join-Path $candidate "bin\java.exe"))) {
+  ) + $registryHomes + `
+      (Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Filter "jdk-21*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "C:\Program Files\Java" -Filter "jdk-21*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "C:\Program Files\Java" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:LOCALAPPDATA\Programs\Eclipse Adoptium" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:LOCALAPPDATA\Programs\Java" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-JdkDir $candidate) {
       return $candidate
     }
   }
   return $null
 }
 
-function Ensure-Jdk21 {
-  $jdk = Find-Jdk21
+function Ensure-Jdk {
+  $jdk = Find-Jdk
   if ($jdk) { return $jdk }
   if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
     Say "Installing Java 21 with winget"
     winget install -e --id EclipseAdoptium.Temurin.21.JDK --accept-package-agreements --accept-source-agreements | Out-Null
-    $jdk = Find-Jdk21
+    $jdk = Find-Jdk
     if ($jdk) { return $jdk }
   }
-  throw "Java 21 was not found and could not be installed automatically."
+  throw "A usable Java JDK was not found and could not be installed automatically."
+}
+
+function Test-GhidraDir($Path) {
+  if (-not $Path) { return $false }
+  return (Test-Path (Join-Path $Path "support\analyzeHeadless.bat")) -and (Test-Path (Join-Path $Path "ghidraRun.bat"))
+}
+
+function Resolve-GhidraDir($Candidate) {
+  if (-not $Candidate) { return $null }
+  if (Test-GhidraDir $Candidate) { return $Candidate }
+  if (-not (Test-Path $Candidate -PathType Container)) { return $null }
+  foreach ($child in (Get-ChildItem $Candidate -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "ghidra*" -or $_.Name -like "Ghidra*" })) {
+    if (Test-GhidraDir $child.FullName) {
+      return $child.FullName
+    }
+  }
+  return $null
 }
 
 function Find-Ghidra {
@@ -184,12 +242,22 @@ function Find-Ghidra {
     $env:GHIDRA_INSTALL_DIR,
     "C:\Program Files\Ghidra",
     "C:\Tools\Ghidra",
-    $DefaultGhidraTarget
+    $DefaultGhidraTarget,
+    "$env:LOCALAPPDATA\Programs\Ghidra",
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop"
   ) + (Get-ChildItem "C:\Program Files" -Filter "ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
-      (Get-ChildItem "$env:USERPROFILE\Downloads" -Filter "ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-  foreach ($candidate in $candidates) {
-    if ($candidate -and (Test-Path (Join-Path $candidate "support\analyzeHeadless.bat")) -and (Test-Path (Join-Path $candidate "ghidraRun.bat"))) {
-      return $candidate
+      (Get-ChildItem "C:\Program Files" -Filter "Ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Filter "ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Filter "Ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:USERPROFILE\Downloads" -Filter "ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:USERPROFILE\Downloads" -Filter "Ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:USERPROFILE\Desktop" -Filter "ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) + `
+      (Get-ChildItem "$env:USERPROFILE\Desktop" -Filter "Ghidra_*" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+    $resolved = Resolve-GhidraDir $candidate
+    if ($resolved) {
+      return $resolved
     }
   }
   return $null
@@ -263,7 +331,7 @@ Copy-Item $PackageSkillDir $TargetDir -Recurse -Force
 
 $bashPath = Ensure-GitBash
 $cygpathPath = Find-Cygpath $bashPath
-$jdkDir = Ensure-Jdk21
+$jdkDir = Ensure-Jdk
 $ghidraDir = Ensure-Ghidra
 
 $env:GHIDRA_INSTALL_DIR = $ghidraDir
@@ -312,7 +380,7 @@ Notes:
   and then register it with:
     ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache
 - The source registry lives at:
-    %USERPROFILE%\.config\ghidra-re\sources.json
+    %APPDATA%\ghidra-re\sources.json
 EOF
 
 chmod +x "$package_skill_dir"/scripts/* "$package_root/Install Ghidra RE.cmd"

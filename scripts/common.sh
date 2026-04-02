@@ -78,14 +78,18 @@ GHIDRA_NOTES_STATE_FILE="${GHIDRA_NOTES_STATE_FILE:-$GHIDRA_NOTES_ROOT/state.jso
 GHIDRA_NOTES_CACHE_JSON="${GHIDRA_NOTES_CACHE_JSON:-$GHIDRA_NOTES_CACHE_DIR/notes.json}"
 GHIDRA_NOTES_CACHE_MD="${GHIDRA_NOTES_CACHE_MD:-$GHIDRA_NOTES_CACHE_DIR/issue.md}"
 
-GHIDRA_DEFAULT_SCRIPT_DIRS=(
-  "$GHIDRA_CUSTOM_SCRIPTS_DIR"
-  "$GHIDRA_INSTALL_DIR/Ghidra/Features/Base/ghidra_scripts"
-  "$GHIDRA_INSTALL_DIR/Ghidra/Features/Decompiler/ghidra_scripts"
-  "$GHIDRA_INSTALL_DIR/Ghidra/Features/PyGhidra/ghidra_scripts"
-  "$GHIDRA_INSTALL_DIR/Ghidra/Features/SwiftDemangler/ghidra_scripts"
-  "$GHIDRA_INSTALL_DIR/Ghidra/Features/Jython/ghidra_scripts"
-)
+ghidra_re_refresh_default_script_dirs() {
+  GHIDRA_DEFAULT_SCRIPT_DIRS=(
+    "$GHIDRA_CUSTOM_SCRIPTS_DIR"
+    "$GHIDRA_INSTALL_DIR/Ghidra/Features/Base/ghidra_scripts"
+    "$GHIDRA_INSTALL_DIR/Ghidra/Features/Decompiler/ghidra_scripts"
+    "$GHIDRA_INSTALL_DIR/Ghidra/Features/PyGhidra/ghidra_scripts"
+    "$GHIDRA_INSTALL_DIR/Ghidra/Features/SwiftDemangler/ghidra_scripts"
+    "$GHIDRA_INSTALL_DIR/Ghidra/Features/Jython/ghidra_scripts"
+  )
+}
+
+ghidra_re_refresh_default_script_dirs
 
 ghidra_re_die() {
   printf 'ghidra-re: %s\n' "$*" >&2
@@ -115,6 +119,15 @@ ghidra_re_platform_is_macos() {
 ghidra_re_ghidra_run_path() {
   local dir="${1:-$GHIDRA_INSTALL_DIR}"
   local candidate=""
+  if ghidra_re_platform_is_windows; then
+    for candidate in "$dir/ghidraRun.bat" "$dir/ghidraRun"; do
+      [[ -f "$candidate" ]] && {
+        printf '%s\n' "$candidate"
+        return 0
+      }
+    done
+    return 1
+  fi
   for candidate in "$dir/ghidraRun" "$dir/ghidraRun.bat"; do
     [[ -f "$candidate" ]] && {
       printf '%s\n' "$candidate"
@@ -136,6 +149,32 @@ ghidra_re_analyze_headless_path() {
   return 1
 }
 
+ghidra_re_is_ghidra_dir() {
+  local dir="${1:-}"
+  [[ -n "$dir" ]] || return 1
+  [[ -n "$(ghidra_re_analyze_headless_path "$dir" || true)" && -n "$(ghidra_re_ghidra_run_path "$dir" || true)" ]]
+}
+
+ghidra_re_resolve_ghidra_dir() {
+  local dir="${1:-}"
+  local nested=""
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  if ghidra_re_is_ghidra_dir "$dir"; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  shopt -s nullglob
+  for nested in "$dir"/ghidra_* "$dir"/Ghidra_* "$dir"/ghidra "$dir"/Ghidra; do
+    if ghidra_re_is_ghidra_dir "$nested"; then
+      printf '%s\n' "$nested"
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
 ghidra_re_gradle_wrapper_path() {
   local dir="${1:-$GHIDRA_INSTALL_DIR}"
   local candidate=""
@@ -150,21 +189,58 @@ ghidra_re_gradle_wrapper_path() {
 
 ghidra_re_valid_ghidra_dir() {
   local dir="${1:-}"
-  [[ -n "$dir" ]] || return 1
-  [[ -n "$(ghidra_re_analyze_headless_path "$dir" || true)" && -n "$(ghidra_re_ghidra_run_path "$dir" || true)" ]]
+  [[ -n "$(ghidra_re_resolve_ghidra_dir "$dir" || true)" ]]
 }
 
 ghidra_re_valid_jdk_dir() {
   local dir="${1:-}"
-  [[ -n "$dir" && ( -f "$dir/bin/java" || -f "$dir/bin/java.exe" ) ]]
+  [[ -n "$dir" && ( -f "$dir/bin/java" || -f "$dir/bin/java.exe" ) && ( -f "$dir/bin/javac" || -f "$dir/bin/javac.exe" ) ]]
+}
+
+ghidra_re_detect_jdk_from_path() {
+  local java_cmd=""
+  local resolved=""
+  local candidate=""
+  for java_cmd in "$(command -v javac 2>/dev/null || true)" "$(command -v java 2>/dev/null || true)"; do
+    [[ -n "$java_cmd" ]] || continue
+    resolved="$java_cmd"
+    if command -v readlink >/dev/null 2>&1; then
+      resolved="$(readlink -f "$java_cmd" 2>/dev/null || printf '%s' "$java_cmd")"
+    fi
+    candidate="$(dirname "$(dirname "$resolved")")"
+    if ghidra_re_valid_jdk_dir "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ghidra_re_auto_configure_tools() {
+  local detected=""
+  if ghidra_re_valid_ghidra_dir "$GHIDRA_INSTALL_DIR"; then
+    GHIDRA_INSTALL_DIR="$(ghidra_re_resolve_ghidra_dir "$GHIDRA_INSTALL_DIR")"
+  else
+    detected="$(ghidra_re_detect_ghidra_dir || true)"
+    [[ -n "$detected" ]] && GHIDRA_INSTALL_DIR="$detected"
+  fi
+
+  if ! ghidra_re_valid_jdk_dir "$GHIDRA_JDK"; then
+    detected="$(ghidra_re_detect_jdk_dir || true)"
+    [[ -n "$detected" ]] && GHIDRA_JDK="$detected"
+  fi
+
+  ghidra_re_refresh_default_script_dirs
 }
 
 ghidra_re_require_tools() {
+  ghidra_re_auto_configure_tools
   ghidra_re_valid_ghidra_dir "$GHIDRA_INSTALL_DIR" || ghidra_re_die "missing Ghidra install at $GHIDRA_INSTALL_DIR"
   ghidra_re_valid_jdk_dir "$GHIDRA_JDK" || ghidra_re_die "missing JDK at $GHIDRA_JDK"
 }
 
 ghidra_re_export_env() {
+  ghidra_re_auto_configure_tools
   export JAVA_HOME="$GHIDRA_JDK"
   export PATH="$JAVA_HOME/bin:$PATH"
   export GHIDRA_INSTALL_DIR
@@ -173,8 +249,10 @@ ghidra_re_export_env() {
 ghidra_re_detect_ghidra_dir() {
   local -a candidates=()
   local candidate
-  if ghidra_re_valid_ghidra_dir "${GHIDRA_INSTALL_DIR:-}"; then
-    printf '%s\n' "$GHIDRA_INSTALL_DIR"
+  local resolved=""
+  resolved="$(ghidra_re_resolve_ghidra_dir "${GHIDRA_INSTALL_DIR:-}" || true)"
+  if [[ -n "$resolved" ]]; then
+    printf '%s\n' "$resolved"
     return 0
   fi
   if ghidra_re_platform_is_windows; then
@@ -182,6 +260,8 @@ ghidra_re_detect_ghidra_dir() {
       "/c/Program Files/Ghidra"
       "/c/Tools/Ghidra"
       "$HOME/AppData/Local/Programs/Ghidra"
+      "$HOME/Downloads"
+      "$HOME/Desktop"
     )
     shopt -s nullglob
     candidates+=(
@@ -189,8 +269,16 @@ ghidra_re_detect_ghidra_dir() {
       /c/Program\ Files/Ghidra_*
       /c/Tools/ghidra_*
       /c/Tools/Ghidra_*
+      "$HOME"/AppData/Local/Programs/ghidra_*
+      "$HOME"/AppData/Local/Programs/Ghidra_*
       "$HOME"/Downloads/ghidra_*
       "$HOME"/Downloads/Ghidra_*
+      "$HOME"/Downloads/ghidra_*/ghidra_*
+      "$HOME"/Downloads/Ghidra_*/ghidra_*
+      "$HOME"/Desktop/ghidra_*
+      "$HOME"/Desktop/Ghidra_*
+      "$HOME"/Desktop/ghidra_*/ghidra_*
+      "$HOME"/Desktop/Ghidra_*/ghidra_*
     )
     shopt -u nullglob
   else
@@ -212,8 +300,9 @@ ghidra_re_detect_ghidra_dir() {
     shopt -u nullglob
   fi
   for candidate in "${candidates[@]}"; do
-    if ghidra_re_valid_ghidra_dir "$candidate"; then
-      printf '%s\n' "$candidate"
+    resolved="$(ghidra_re_resolve_ghidra_dir "$candidate" || true)"
+    if [[ -n "$resolved" ]]; then
+      printf '%s\n' "$resolved"
       return 0
     fi
   done
@@ -230,13 +319,22 @@ ghidra_re_detect_jdk_dir() {
     printf '%s\n' "$JAVA_HOME"
     return 0
   fi
+  candidate="$(ghidra_re_detect_jdk_from_path || true)"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
   local -a candidates=()
   if ghidra_re_platform_is_windows; then
     shopt -s nullglob
     candidates+=(
       /c/Program\ Files/Eclipse\ Adoptium/jdk-21*
+      /c/Program\ Files/Eclipse\ Adoptium/jdk-*
       /c/Program\ Files/Java/jdk-21*
+      /c/Program\ Files/Java/jdk-*
       "$HOME"/AppData/Local/Programs/Eclipse\ Adoptium/jdk-21*
+      "$HOME"/AppData/Local/Programs/Eclipse\ Adoptium/jdk-*
+      "$HOME"/AppData/Local/Programs/Java/jdk-*
     )
     shopt -u nullglob
   else
@@ -414,6 +512,8 @@ if session_file and pathlib.Path(session_file).is_file():
 print(json.dumps(payload))
 PY
 }
+
+ghidra_re_auto_configure_tools
 
 ghidra_re_timestamp() {
   date '+%Y%m%d-%H%M%S'
