@@ -19,6 +19,9 @@ category="workflow"
 target=""
 status="remediated"
 superseded_by=""
+requested_session=""
+project_name=""
+program_name=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -30,6 +33,9 @@ for arg in "$@"; do
     target=*) target="${arg#target=}" ;;
     status=*) status="${arg#status=}" ;;
     superseded_by=*) superseded_by="${arg#superseded_by=}" ;;
+    session=*) requested_session="${arg#session=}" ;;
+    project=*) project_name="${arg#project=}" ;;
+    program=*) program_name="${arg#program=}" ;;
     -h|--help)
       usage
       exit 0
@@ -57,7 +63,7 @@ if [[ -z "$body" ]]; then
 fi
 [[ -n "$body" ]] || body="Marked as $status."
 
-context_json="$(ghidra_re_notes_current_context_json)"
+context_json="$(ghidra_re_notes_current_context_json "$requested_session" "$project_name" "$program_name")"
 platform_value="$GHIDRA_RE_PLATFORM"
 skill_version="$(ghidra_re_skill_version)"
 

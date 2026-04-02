@@ -26,7 +26,7 @@ ghidra_re_ensure_workspace
 ghidra_re_require_project "$project_name"
 
 manifest_path="$(ghidra_re_bug_hunt_manifest)"
-slug="$(basename "$(printf '%s' "$target" | tr '[:space:]/:' '_' )")"
+slug="$(printf '%s' "$target" | tr '[:space:]/:' '_' )"
 slug="$(ghidra_re_sanitize_name "$slug")"
 dossier_dir="$(ghidra_re_dossiers_dir "$project_name" "$program_name")/$slug"
 log_dir="$(ghidra_re_log_dir "$project_name")"
@@ -35,12 +35,27 @@ log_file="$log_dir/dossier-${slug}-${timestamp}.log"
 script_log="$log_dir/dossier-${slug}-${timestamp}.script.log"
 script_path="$(ghidra_re_script_path)"
 analyze_headless="$(ghidra_re_analyze_headless_path)"
+working_project_name="$project_name"
+working_project_root="$(ghidra_re_project_location "$project_name")"
+snapshot_root=""
 
 mkdir -p "$dossier_dir" "$log_dir"
+
+cleanup() {
+  if [[ -n "$snapshot_root" && -d "$snapshot_root" ]]; then
+    rm -rf "$snapshot_root"
+  fi
+}
+trap cleanup EXIT
 
 target_arg_name="function"
 if [[ "$target" =~ ^0x[0-9a-fA-F]+$ || "$target" =~ ^[0-9a-fA-F]+$ ]]; then
   target_arg_name="address"
+fi
+
+if ghidra_re_project_has_live_session "$project_name" "$program_name" || ghidra_re_project_has_lock_files "$project_name"; then
+  IFS='|' read -r snapshot_root working_project_name _ <<<"$(ghidra_re_create_readonly_project_snapshot "$project_name" "dossier-$slug")"
+  working_project_root="$snapshot_root/$working_project_name"
 fi
 
 optional_args=()
@@ -62,8 +77,8 @@ esac
 
 cmd=(
   "$analyze_headless"
-  "$(ghidra_re_project_location "$project_name")"
-  "$project_name"
+  "$working_project_root"
+  "$working_project_name"
   -process "$program_name"
   -readOnly
   -scriptPath "$script_path"

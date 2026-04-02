@@ -680,6 +680,7 @@ def register_framework_node(conn, target_key, summary):
 def ingest_export_bundle(conn, target_key, export_dir: Path):
     summary = load_json(export_dir / "program_summary.json")
     objc = load_json(export_dir / "objc_metadata.json")
+    swift = load_json(export_dir / "swift_metadata.json") if (export_dir / "swift_metadata.json").is_file() else {}
     functions = load_json(export_dir / "function_inventory.json")
     symbols = load_json(export_dir / "symbols.json")
     strings = load_json(export_dir / "strings.json")
@@ -689,11 +690,14 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
     for kind, filename in [
         ("program-summary", "program_summary.json"),
         ("objc-metadata", "objc_metadata.json"),
+        ("swift-metadata", "swift_metadata.json"),
         ("function-inventory", "function_inventory.json"),
         ("symbols", "symbols.json"),
         ("strings", "strings.json"),
     ]:
-        add_artifact(conn, target_key, kind, export_dir / filename)
+        artifact_path = export_dir / filename
+        if artifact_path.is_file():
+            add_artifact(conn, target_key, kind, artifact_path)
 
     for item in functions.get("functions", []):
         node_key = function_node_key(target_key, item.get("entry", ""))
@@ -752,6 +756,28 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
             service_key = global_service_key(value)
             upsert_node(conn, "service", service_key, value, "*", {"source": "strings"})
             upsert_edge(conn, "derived-from", framework_key, service_key, {"source": "strings", "address": address}, 0.55)
+
+    for item in swift.get("symbols", []):
+        name = item.get("name", "")
+        if not name:
+            continue
+        symbol_key = global_symbol_key(name)
+        upsert_node(conn, "symbol", symbol_key, name, target_key, item)
+        upsert_edge(conn, "derived-from", symbol_key, framework_key, {"source": "swift_metadata"}, 0.7)
+
+    for type_name in swift.get("types", []):
+        if not type_name:
+            continue
+        type_key = f"{target_key}:type:{type_name}"
+        upsert_node(conn, "type", type_key, type_name, target_key, {"source": "swift_metadata"})
+        upsert_edge(conn, "derived-from", type_key, framework_key, {"source": "swift_metadata"}, 0.7)
+
+    for protocol_name in swift.get("protocol_conformances", []):
+        if not protocol_name:
+            continue
+        protocol_key = f"{target_key}:protocol:{protocol_name}"
+        upsert_node(conn, "protocol", protocol_key, protocol_name, target_key, {"source": "swift_metadata"})
+        upsert_edge(conn, "derived-from", protocol_key, framework_key, {"source": "swift_metadata"}, 0.65)
 
     refresh_same_subsystem_links(conn, target_key)
 
@@ -1292,6 +1318,7 @@ def cmd_init(args):
 def cmd_register_target(args):
     paths = mission_paths(Path(args.mission_dir))
     conn = connect_db(paths["graph_db"])
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {"target_ref": args.target_key}
     upsert_target(
         conn,
         args.target_key,
@@ -1300,7 +1327,7 @@ def cmd_register_target(args):
         binary_path=args.binary_path,
         program_path=args.program_path,
         export_dir=args.export_dir,
-        metadata={"target_ref": args.target_key},
+        metadata=metadata,
     )
     conn.commit()
     touch_mission(paths)
@@ -1461,6 +1488,7 @@ def build_parser():
     target_parser.add_argument("--binary-path", default="")
     target_parser.add_argument("--program-path", default="")
     target_parser.add_argument("--export-dir", default="")
+    target_parser.add_argument("--metadata-json", default="")
     target_parser.set_defaults(func=cmd_register_target)
 
     session_parser = subparsers.add_parser("register-session")

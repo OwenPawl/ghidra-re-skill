@@ -15,7 +15,7 @@ ghidra_re_bridge_prune_stale_sessions
 selector_values="$(ghidra_re_bridge_extract_selectors_from_json "$body")"
 IFS=$'\t' read -r requested_session requested_project requested_program <<<"$selector_values"
 if [[ -n "$requested_session" || -n "$requested_project" || -n "$requested_program" ]]; then
-  if ! ghidra_re_bridge_select_session "$requested_session" "$requested_project" "$requested_program" >/dev/null 2>&1; then
+  if ! ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program" >/dev/null 2>&1; then
     printf 'Bridge: disarmed\n'
     exit 0
   fi

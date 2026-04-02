@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+[[ $# -eq 3 ]] || {
+  echo "Usage: ghidra_describe_selector <project_name> <program_name> <selector>" >&2
+  exit 1
+}
+
+project_name="$1"
+program_name="$2"
+selector="$3"
+export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
+
+if [[ ! -f "$export_dir/objc_metadata.json" || ! -f "$export_dir/strings.json" ]]; then
+  "$SCRIPT_DIR/ghidra_export_apple_bundle" "$project_name" "$program_name" >/dev/null
+fi
+
+trace_file=""
+cleanup() {
+  [[ -n "$trace_file" && -f "$trace_file" ]] && rm -f "$trace_file"
+}
+trap cleanup EXIT
+
+if ghidra_re_project_has_live_session "$project_name" "$program_name"; then
+  trace_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-selector-trace.XXXXXX.json")"
+  "$SCRIPT_DIR/ghidra_bridge_selector_trace" \
+    "selector=$selector" \
+    "project=$project_name" \
+    "program=$program_name" \
+    "exact=true" >"$trace_file" 2>/dev/null || printf '{}' >"$trace_file"
+fi
+
+python3 - "$export_dir/objc_metadata.json" "$export_dir/strings.json" "$selector" "${trace_file:-}" <<'PY'
+import json, pathlib, sys
+
+objc = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+strings = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+selector = sys.argv[3]
+trace_path = pathlib.Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+trace = {}
+if trace_path and trace_path.is_file():
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+
+methods = [m for m in objc.get("methods", []) if m.get("selector") == selector]
+string_hits = [s for s in strings.get("strings", []) if s.get("value") == selector or s.get("string_value") == selector]
+
+payload = {
+    "selector": selector,
+    "method_matches": methods,
+    "string_matches": string_hits,
+    "live_trace": trace.get("result") if isinstance(trace, dict) and trace.get("ok") else {},
+}
+print(json.dumps(payload, indent=2))
+PY

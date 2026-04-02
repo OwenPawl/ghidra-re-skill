@@ -16,6 +16,7 @@ body=""
 category="workflow"
 target=""
 mission_name=""
+requested_session=""
 project_name=""
 program_name=""
 program_path=""
@@ -30,6 +31,7 @@ for arg in "$@"; do
     category=*) category="${arg#category=}" ;;
     target=*) target="${arg#target=}" ;;
     mission=*) mission_name="${arg#mission=}" ;;
+    session=*) requested_session="${arg#session=}" ;;
     project=*) project_name="${arg#project=}" ;;
     program=*) program_name="${arg#program=}" ;;
     program_path=*) program_path="${arg#program_path=}" ;;
@@ -53,7 +55,7 @@ done
 
 ghidra_re_notes_init_files
 
-context_json="$(ghidra_re_notes_current_context_json)"
+context_json="$(ghidra_re_notes_current_context_json "$requested_session" "$project_name" "$program_name")"
 
 session_metadata_json="$("$(ghidra_re_python)" - "$context_json" "$mission_name" "$project_name" "$program_name" "$program_path" "$context_mode" <<'PY'
 import json, sys

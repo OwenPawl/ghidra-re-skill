@@ -98,9 +98,14 @@ import ghidra.program.model.listing.ParameterImpl;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.ReturnParameterImpl;
 import ghidra.program.model.listing.Variable;
+import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolIterator;
+import ghidra.program.model.symbol.SymbolTable;
 import ghidra.program.util.ProgramLocation;
 import ghidra.program.util.ProgramSelection;
 import ghidra.util.InvalidNameException;
@@ -124,6 +129,11 @@ class CodexBridgeService {
 		"/function",
 		"/decompile",
 		"/references",
+		"/data/get",
+		"/strings/search",
+		"/symbols/get",
+		"/symbols/xrefs",
+		"/memory/range",
 		"/variables",
 		"/datatypes/search",
 		"/objc/selector-trace",
@@ -511,6 +521,16 @@ class CodexBridgeService {
 				return handleDecompile(body);
 			case "/references":
 				return handleReferences(body);
+			case "/data/get":
+				return handleDataGet(body);
+			case "/strings/search":
+				return handleStringsSearch(body);
+			case "/symbols/get":
+				return handleSymbolsGet(body);
+			case "/symbols/xrefs":
+				return handleSymbolXrefs(body);
+			case "/memory/range":
+				return handleMemoryRange(body);
 			case "/variables":
 				return handleVariables(body);
 			case "/datatypes/search":
@@ -837,9 +857,14 @@ class CodexBridgeService {
 				throw new BridgeException(500, "decompilation failed: " + results.getErrorMessage());
 			}
 			JsonObject payload = new JsonObject();
+			String cText = results.getDecompiledFunction().getC();
 			payload.add("function_ref", functionRef(function));
 			payload.addProperty("signature", function.getPrototypeString(false, false));
-			payload.addProperty("c", results.getDecompiledFunction().getC());
+			payload.addProperty("c", cText);
+			if (isLowSignalDecompile(function, cText)) {
+				payload.addProperty("signal", "low");
+				payload.add("enrichment", buildLowSignalFunctionContext(program, function, 12));
+			}
 			return payload;
 		}
 		finally {
@@ -850,14 +875,25 @@ class CodexBridgeService {
 	private JsonElement handleReferences(JsonObject body) throws Exception {
 		Program program = requireProgram();
 		JsonObject result = new JsonObject();
+		boolean rawAddressRequested = hasExplicitAddressSelector(body);
 		Function function = null;
-		try {
-			function = resolveFunction(program, body);
+		Address address;
+		if (rawAddressRequested) {
+			address = resolveExactAddress(program, body, false);
+			Function containing = program.getFunctionManager().getFunctionContaining(address);
+			if (containing != null) {
+				result.add("containing_function", functionToJson(containing, false));
+			}
 		}
-		catch (BridgeException ignored) {
-			// Fall through and try raw address resolution.
+		else {
+			try {
+				function = resolveFunction(program, body);
+			}
+			catch (BridgeException ignored) {
+				// Fall through and try raw address resolution.
+			}
+			address = function == null ? resolveExactAddress(program, body, true) : function.getEntryPoint();
 		}
-		Address address = function == null ? resolveAddress(program, body, true) : function.getEntryPoint();
 		if (function != null) {
 			result.add("function_ref", functionRef(function));
 			JsonArray callers = new JsonArray();
@@ -879,6 +915,113 @@ class CodexBridgeService {
 		result.addProperty("address", address.toString());
 		result.add("references_to", referencesToJson(new FlatProgramAPI(program), address, MAX_RESULTS));
 		result.add("references_from", referencesFromJson(new FlatProgramAPI(program), address, MAX_RESULTS));
+		Data data = program.getListing().getDefinedDataContaining(address);
+		if (data != null) {
+			result.add("data", dataToJson(program, data, 10));
+		}
+		return result;
+	}
+
+	private JsonElement handleDataGet(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		Address address = resolveExactAddress(program, body, false);
+		Data data = program.getListing().getDefinedDataContaining(address);
+		if (data == null) {
+			throw new BridgeException(404, "no defined data at or containing " + address);
+		}
+		JsonObject result = dataToJson(program, data, MAX_RESULTS);
+		result.addProperty("requested_address", address.toString());
+		return result;
+	}
+
+	private JsonElement handleStringsSearch(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		String query = optString(body, "query", "value", "string");
+		if (query.isEmpty()) {
+			throw new BridgeException(400, "missing query");
+		}
+		int limit = Math.max(1, Math.min(optInt(body, "limit", MAX_RESULTS), 250));
+		boolean exact = optBoolean(body, "exact", false);
+		boolean caseSensitive = optBoolean(body, "case_sensitive", false);
+		String normalizedQuery = normalizeForSearch(query, caseSensitive);
+		JsonObject result = new JsonObject();
+		result.addProperty("query", query);
+		result.addProperty("exact", exact);
+		result.addProperty("case_sensitive", caseSensitive);
+		JsonArray matches = new JsonArray();
+		DataIterator iterator = program.getListing().getDefinedData(true);
+		while (iterator.hasNext()) {
+			Data data = iterator.next();
+			String candidate = candidateDataString(data);
+			if (candidate.isEmpty()) {
+				continue;
+			}
+			String normalizedCandidate = normalizeForSearch(candidate, caseSensitive);
+			boolean matched = exact ? normalizedCandidate.equals(normalizedQuery) :
+				normalizedCandidate.contains(normalizedQuery);
+			if (!matched) {
+				continue;
+			}
+			matches.add(dataToJson(program, data, 10));
+			if (matches.size() >= limit) {
+				break;
+			}
+		}
+		result.addProperty("match_count", matches.size());
+		result.add("matches", matches);
+		return result;
+	}
+
+	private JsonElement handleSymbolsGet(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		List<Symbol> symbols = resolveSymbols(program, body, false);
+		JsonObject result = new JsonObject();
+		JsonArray matches = new JsonArray();
+		for (Symbol symbol : symbols) {
+			matches.add(symbolToJson(program, symbol, 10));
+		}
+		result.addProperty("match_count", matches.size());
+		result.add("matches", matches);
+		if (!symbols.isEmpty()) {
+			result.add("symbol", symbolToJson(program, symbols.get(0), 10));
+		}
+		return result;
+	}
+
+	private JsonElement handleSymbolXrefs(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		List<Symbol> symbols = resolveSymbols(program, body, false);
+		Symbol symbol = symbols.get(0);
+		JsonObject result = new JsonObject();
+		result.add("symbol", symbolToJson(program, symbol, 10));
+		result.add("references_to",
+			referencesToJson(new FlatProgramAPI(program), symbol.getAddress(), MAX_RESULTS));
+		result.add("references_from",
+			referencesFromJson(new FlatProgramAPI(program), symbol.getAddress(), MAX_RESULTS));
+		return result;
+	}
+
+	private JsonElement handleMemoryRange(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		Address start = resolveExactAddress(program, body, false);
+		Address end = resolveEndAddress(program, body, start);
+		long lengthLong = end.subtract(start) + 1L;
+		int length = (int) Math.max(1L, Math.min(lengthLong, MAX_BYTES_IN_LOG));
+		byte[] bytes;
+		try {
+			bytes = new FlatProgramAPI(program, TaskMonitor.DUMMY).getBytes(start, length);
+		}
+		catch (Exception e) {
+			throw new BridgeException(500, "failed to read memory range: " + e.getMessage());
+		}
+		JsonObject result = rangeSnapshot(program, start, end);
+		result.addProperty("ascii", bytesToAscii(bytes));
+		result.addProperty("effective_length", length);
+		MemoryBlock block = program.getMemory().getBlock(start);
+		if (block != null) {
+			result.addProperty("block", block.getName());
+			result.addProperty("source_name", block.getSourceName());
+		}
 		return result;
 	}
 
@@ -969,9 +1112,9 @@ class CodexBridgeService {
 			if (symbol == null) {
 				throw new BridgeException(404, "no symbol at " + address);
 			}
-			mutation.before = symbolToJson(symbol);
+			mutation.before = symbolToJson(program, symbol, 10);
 			symbol.setName(newName, SourceType.USER_DEFINED);
-			mutation.result = symbolToJson(symbol);
+			mutation.result = symbolToJson(program, symbol, 10);
 			mutation.targets.add(locationRef(program, address));
 			return mutation;
 		});
@@ -1335,7 +1478,7 @@ class CodexBridgeService {
 			mutation.before = rangeSnapshot(program, address, end);
 			program.getListing().clearCodeUnits(address, end, false);
 			Data data = flat.createData(address, dataType);
-			mutation.result = dataToJson(data);
+			mutation.result = dataToJson(program, data, 10);
 			mutation.targets.add(locationRef(program, address));
 			mutation.inverse.addProperty("kind", "data-delete");
 			mutation.inverse.addProperty("address", address.toString());
@@ -1580,6 +1723,9 @@ class CodexBridgeService {
 		boolean matched = exact ? normalizedCandidate.equals(normalizedQuery) :
 			normalizedCandidate.contains(normalizedQuery);
 		if (!matched) {
+			matched = matchesNormalizedQuery(candidateValue, query, exact, caseSensitive);
+		}
+		if (!matched) {
 			return null;
 		}
 		String matchKind;
@@ -1604,6 +1750,42 @@ class CodexBridgeService {
 			return "";
 		}
 		return caseSensitive ? value : value.toLowerCase(Locale.ROOT);
+	}
+
+	private String normalizeFunctionLookupValue(String value, boolean caseSensitive) {
+		String normalized = normalizeForSearch(value, caseSensitive).trim();
+		if (normalized.isEmpty()) {
+			return normalized;
+		}
+		normalized = normalized.replaceAll("\\s+", " ");
+		if (normalized.startsWith("-[") || normalized.startsWith("+[")) {
+			int closeIndex = normalized.indexOf(']');
+			int spaceIndex = normalized.indexOf(' ');
+			if (spaceIndex < 0 || (closeIndex > 0 && spaceIndex > closeIndex)) {
+				int separatorIndex = normalized.indexOf('_', 2);
+				if (separatorIndex > 2 && (closeIndex < 0 || separatorIndex < closeIndex)) {
+					normalized = normalized.substring(0, separatorIndex) + " " +
+						normalized.substring(separatorIndex + 1);
+				}
+			}
+			normalized = normalized.replace("[ ", "[");
+			normalized = normalized.replace(" ]", "]");
+			normalized = normalized.replace(" :", ":");
+			normalized = normalized.replace("( ", "(");
+			normalized = normalized.replace(" )", ")");
+		}
+		return normalized;
+	}
+
+	private boolean matchesNormalizedQuery(String candidate, String query, boolean exact,
+			boolean caseSensitive) {
+		String normalizedCandidate = normalizeFunctionLookupValue(candidate, caseSensitive);
+		String normalizedQuery = normalizeFunctionLookupValue(query, caseSensitive);
+		if (normalizedCandidate.isEmpty() || normalizedQuery.isEmpty()) {
+			return false;
+		}
+		return exact ? normalizedCandidate.equals(normalizedQuery) :
+			normalizedCandidate.contains(normalizedQuery);
 	}
 
 	private JsonObject variableToJson(Variable variable) {
@@ -1635,13 +1817,33 @@ class CodexBridgeService {
 		return object;
 	}
 
-	private JsonObject dataToJson(Data data) {
+	private JsonObject dataToJson(Program program, Data data, int xrefLimit) {
 		JsonObject object = new JsonObject();
-		object.add("location_ref", locationRef(plugin.getCurrentProgram(), data.getAddress()));
+		object.add("location_ref", locationRef(program, data.getAddress()));
 		object.addProperty("address", data.getAddress().toString());
 		object.addProperty("datatype", data.getDataType().getPathName());
 		object.addProperty("length", data.getLength());
 		object.addProperty("value", safeValue(data));
+		MemoryBlock block = program.getMemory().getBlock(data.getAddress());
+		String blockName = block == null ? "" : empty(block.getName());
+		object.addProperty("block", blockName);
+		object.addProperty("artifact_type", classifyDataArtifact(data, blockName));
+		String candidate = candidateDataString(data);
+		if (!candidate.isEmpty()) {
+			object.addProperty("string_value", candidate);
+		}
+		object.add("references_to",
+			referencesToJson(new FlatProgramAPI(program, TaskMonitor.DUMMY), data.getAddress(),
+				xrefLimit));
+		return object;
+	}
+
+	private JsonObject dataRef(Program program, Data data) {
+		JsonObject object = new JsonObject();
+		object.addProperty("program_path", programPath(program));
+		object.addProperty("address", data == null ? "" : data.getAddress().toString());
+		object.addProperty("datatype",
+			data == null || data.getDataType() == null ? "" : data.getDataType().getPathName());
 		return object;
 	}
 
@@ -1664,6 +1866,178 @@ class CodexBridgeService {
 			value = value.substring(1, value.length() - 1);
 		}
 		return value;
+	}
+
+	private String classifyDataArtifact(Data data, String blockName) {
+		String lowerBlock = blockName == null ? "" : blockName.toLowerCase(Locale.ROOT);
+		String dataType = data.getDataType() == null ? "" : data.getDataType().getPathName().toLowerCase(Locale.ROOT);
+		if (lowerBlock.contains("objc_methname")) {
+			return "objc_selector";
+		}
+		if (lowerBlock.contains("objc_classname")) {
+			return "objc_classname";
+		}
+		if (lowerBlock.contains("cfstring")) {
+			return "cfstring";
+		}
+		if (lowerBlock.contains("classref")) {
+			return "objc_classref";
+		}
+		if (lowerBlock.contains("selref")) {
+			return "objc_selref";
+		}
+		if (lowerBlock.contains("ivar")) {
+			return "objc_ivar";
+		}
+		if (lowerBlock.contains("protocol")) {
+			return "objc_protocol";
+		}
+		if (dataType.contains("string")) {
+			return "string";
+		}
+		return "data";
+	}
+
+	private boolean isLowSignalDecompile(Function function, String cText) {
+		String name = function == null ? "" : empty(function.getName());
+		String c = cText == null ? "" : cText;
+		if (name.startsWith("_OUTLINED_FUNCTION_")) {
+			return true;
+		}
+		if (name.startsWith("FUN_") && function != null && function.getBody().getNumAddresses() <= 16) {
+			return true;
+		}
+		return c.contains("_OUTLINED_FUNCTION_") || c.contains("/* WARNING:") ||
+			(function != null && function.getBody().getNumAddresses() <= 12);
+	}
+
+	private JsonObject buildLowSignalFunctionContext(Program program, Function function, int limit) {
+		JsonObject payload = new JsonObject();
+		payload.addProperty("name", function.getName());
+		payload.addProperty("entry", function.getEntryPoint().toString());
+		payload.addProperty("body_size", function.getBody().getNumAddresses());
+		MemoryBlock block = program.getMemory().getBlock(function.getEntryPoint());
+		payload.addProperty("section", block == null ? "" : empty(block.getName()));
+
+		Set<String> nearbyStrings = new LinkedHashSet<>();
+		Set<String> nearbySelectors = new LinkedHashSet<>();
+		Set<String> nearbySymbols = new LinkedHashSet<>();
+		Set<String> calledSymbols = new LinkedHashSet<>();
+		Listing listing = program.getListing();
+		SymbolTable symbolTable = program.getSymbolTable();
+		InstructionIterator iterator = listing.getInstructions(function.getBody(), true);
+		while (iterator.hasNext()) {
+			Instruction instruction = iterator.next();
+			for (Reference reference : instruction.getReferencesFrom()) {
+				Address toAddress = reference.getToAddress();
+				if (toAddress == null) {
+					continue;
+				}
+				Data data = listing.getDefinedDataContaining(toAddress);
+				if (data != null) {
+					String value = candidateDataString(data);
+					if (!value.isEmpty()) {
+						MemoryBlock dataBlock = program.getMemory().getBlock(data.getAddress());
+						String blockName =
+							dataBlock == null ? "" : empty(dataBlock.getName()).toLowerCase(Locale.ROOT);
+						if (blockName.contains("objc_methname") || blockName.contains("selref")) {
+							nearbySelectors.add(value);
+						}
+						else {
+							nearbyStrings.add(value);
+						}
+					}
+				}
+				Symbol symbol = symbolTable.getPrimarySymbol(toAddress);
+				if (symbol != null) {
+					String name = empty(symbol.getName());
+					if (!name.isEmpty()) {
+						nearbySymbols.add(name);
+						if (reference.getReferenceType().isCall()) {
+							calledSymbols.add(name);
+						}
+					}
+				}
+			}
+		}
+		payload.add("nearby_strings", toJsonArray(nearbyStrings, limit));
+		payload.add("nearby_selectors", toJsonArray(nearbySelectors, limit));
+		payload.add("nearby_symbols", toJsonArray(nearbySymbols, limit));
+		payload.add("called_symbols", toJsonArray(calledSymbols, limit));
+		return payload;
+	}
+
+	private JsonArray toJsonArray(Collection<String> values, int limit) {
+		JsonArray array = new JsonArray();
+		int count = 0;
+		for (String value : values) {
+			if (value == null || value.isEmpty()) {
+				continue;
+			}
+			array.add(value);
+			count++;
+			if (count >= limit) {
+				break;
+			}
+		}
+		return array;
+	}
+
+	private String classifySymbolArtifact(Symbol symbol) {
+		String name = symbol.getName();
+		String lower = name.toLowerCase(Locale.ROOT);
+		if (name.startsWith("-[") || name.startsWith("+[")) {
+			return "objc_method";
+		}
+		if (name.startsWith("_OBJC_CLASS_$_")) {
+			return "objc_class";
+		}
+		if (name.startsWith("_OBJC_METACLASS_$_")) {
+			return "objc_metaclass";
+		}
+		if (name.startsWith("_OBJC_PROTOCOL_$_")) {
+			return "objc_protocol";
+		}
+		if (name.startsWith("_OBJC_CATEGORY_$_")) {
+			return "objc_category";
+		}
+		if (name.startsWith("selRef_")) {
+			return "objc_selref";
+		}
+		if (lower.contains("classref")) {
+			return "objc_classref";
+		}
+		if (lower.contains("ivar")) {
+			return "objc_ivar";
+		}
+		if (name.startsWith("$s") || name.startsWith("_$s") || lower.contains("swift")) {
+			return "swift_symbol";
+		}
+		return "symbol";
+	}
+
+	private int referenceCount(Program program, Address address) {
+		int count = 0;
+		ReferenceIterator iterator = program.getReferenceManager().getReferencesTo(address);
+		while (iterator.hasNext()) {
+			iterator.next();
+			count++;
+		}
+		return count;
+	}
+
+	private String bytesToAscii(byte[] bytes) {
+		StringBuilder builder = new StringBuilder();
+		for (byte value : bytes) {
+			int unsigned = value & 0xff;
+			if (unsigned >= 32 && unsigned <= 126) {
+				builder.append((char) unsigned);
+			}
+			else {
+				builder.append('.');
+			}
+		}
+		return builder.toString();
 	}
 
 	private JsonArray referencesToJson(FlatProgramAPI flat, Address address, int limit) {
@@ -1734,6 +2108,19 @@ class CodexBridgeService {
 		return object;
 	}
 
+	private String namespacePath(Namespace namespace) {
+		if (namespace == null) {
+			return "";
+		}
+		List<String> names = new ArrayList<>();
+		Namespace current = namespace;
+		while (current != null && !current.isGlobal()) {
+			names.add(0, current.getName());
+			current = current.getParentNamespace();
+		}
+		return String.join("::", names);
+	}
+
 	private JsonObject variableRef(Variable variable) {
 		JsonObject object = new JsonObject();
 		object.addProperty("program_path",
@@ -1758,12 +2145,20 @@ class CodexBridgeService {
 		return object;
 	}
 
-	private JsonObject symbolToJson(Symbol symbol) {
+	private JsonObject symbolToJson(Program program, Symbol symbol, int xrefLimit) {
 		JsonObject object = new JsonObject();
 		object.addProperty("name", symbol.getName());
 		object.addProperty("address", symbol.getAddress().toString());
 		object.addProperty("kind", symbol.getSymbolType().toString());
 		object.addProperty("source", symbol.getSource().toString());
+		object.addProperty("namespace", namespacePath(symbol.getParentNamespace()));
+		object.addProperty("artifact_type", classifySymbolArtifact(symbol));
+		object.add("location_ref", locationRef(program, symbol.getAddress()));
+		object.addProperty("xref_count",
+			referenceCount(program, symbol.getAddress()));
+		object.add("sample_xrefs",
+			referencesToJson(new FlatProgramAPI(program, TaskMonitor.DUMMY), symbol.getAddress(),
+				xrefLimit));
 		return object;
 	}
 
@@ -1842,6 +2237,24 @@ class CodexBridgeService {
 		return flat.getBytes(instruction.getAddress(), instruction.getLength());
 	}
 
+	private boolean hasExplicitSessionSelector(JsonObject body) {
+		return hasAny(body, "session", "session_id", "project", "project_name", "program",
+			"program_name");
+	}
+
+	private boolean hasExplicitFunctionSelector(JsonObject body) {
+		return optObject(body, "function_ref") != null || hasAny(body, "function", "function_name");
+	}
+
+	private boolean hasExplicitAddressSelector(JsonObject body) {
+		return optObject(body, "location_ref") != null || hasAny(body, "address", "entry", "start");
+	}
+
+	private boolean hasAnyExplicitTargetSelector(JsonObject body) {
+		return hasExplicitSessionSelector(body) || hasExplicitFunctionSelector(body) ||
+			hasExplicitAddressSelector(body);
+	}
+
 	private Function resolveFunction(Program program, JsonObject body) throws Exception {
 		return resolveFunction(program, body, false);
 	}
@@ -1880,6 +2293,12 @@ class CodexBridgeService {
 				return byAddress;
 			}
 		}
+		if (hasAnyExplicitTargetSelector(body)) {
+			if (allowMissing) {
+				return null;
+			}
+			throw new BridgeException(404, "unable to resolve function from explicit target");
+		}
 		Function current = plugin.getCurrentFunction();
 		if (current != null) {
 			return current;
@@ -1891,17 +2310,41 @@ class CodexBridgeService {
 	}
 
 	private Function resolveFunctionByName(Program program, String name) {
+		String normalizedName = normalizeFunctionLookupValue(name, false);
+		Function exact = null;
+		Function normalizedExact = null;
+		Function caseInsensitive = null;
+		Function contains = null;
 		for (Function function : program.getListing().getGlobalFunctions(name)) {
 			return function;
 		}
 		for (ghidra.program.model.listing.FunctionIterator iterator =
 			program.getFunctionManager().getFunctions(true); iterator.hasNext();) {
 			Function function = iterator.next();
-			if (name.equals(function.getName()) || name.equals(function.getPrototypeString(false, false))) {
-				return function;
+			String functionName = function.getName();
+			String signature = function.getPrototypeString(false, false);
+			if (name.equals(functionName) || name.equals(signature)) {
+				exact = function;
+				break;
+			}
+			if (normalizedExact == null && (normalizedName.equals(
+				normalizeFunctionLookupValue(functionName, false)) || normalizedName.equals(
+					normalizeFunctionLookupValue(signature, false)))) {
+				normalizedExact = function;
+			}
+			if (caseInsensitive == null &&
+				(functionName.equalsIgnoreCase(name) || signature.equalsIgnoreCase(name))) {
+				caseInsensitive = function;
+			}
+			if (contains == null &&
+				(matchesNormalizedQuery(functionName, name, false, false) ||
+					matchesNormalizedQuery(signature, name, false, false))) {
+				contains = function;
 			}
 		}
-		return null;
+		return exact != null ? exact :
+			normalizedExact != null ? normalizedExact :
+				caseInsensitive != null ? caseInsensitive : contains;
 	}
 
 	private Variable resolveVariable(Program program, JsonObject body, boolean allowMissing)
@@ -1968,16 +2411,15 @@ class CodexBridgeService {
 
 	private Address resolveAddress(Program program, JsonObject body, boolean allowMissing)
 			throws Exception {
-		JsonObject locationRef = optObject(body, "location_ref");
-		if (locationRef != null) {
-			String address = optString(locationRef, "address");
-			if (!address.isEmpty()) {
-				return parseAddress(program, address);
-			}
+		Address explicit = resolveExactAddress(program, body, true);
+		if (explicit != null) {
+			return explicit;
 		}
-		String address = optString(body, "address", "entry", "start");
-		if (!address.isEmpty()) {
-			return parseAddress(program, address);
+		if (hasAnyExplicitTargetSelector(body)) {
+			if (allowMissing) {
+				return null;
+			}
+			throw new BridgeException(404, "unable to resolve address from explicit target");
 		}
 		Function function = resolveFunction(program, body, true);
 		if (function != null) {
@@ -1991,6 +2433,80 @@ class CodexBridgeService {
 			return null;
 		}
 		throw new BridgeException(404, "unable to resolve address");
+	}
+
+	private Address resolveExactAddress(Program program, JsonObject body, boolean allowMissing)
+			throws Exception {
+		JsonObject locationRef = optObject(body, "location_ref");
+		if (locationRef != null) {
+			String address = optString(locationRef, "address");
+			if (!address.isEmpty()) {
+				return parseAddress(program, address);
+			}
+		}
+		String address = optString(body, "address", "entry", "start");
+		if (!address.isEmpty()) {
+			return parseAddress(program, address);
+		}
+		if (allowMissing) {
+			return null;
+		}
+		throw new BridgeException(404, "unable to resolve exact address");
+	}
+
+	private List<Symbol> resolveSymbols(Program program, JsonObject body, boolean allowMissing)
+			throws Exception {
+		List<Symbol> matches = new ArrayList<>();
+		JsonObject symbolRef = optObject(body, "symbol_ref");
+		String query = optString(body, "symbol", "name", "query");
+		String addressText = optString(body, "address");
+		if (symbolRef != null) {
+			if (query.isEmpty()) {
+				query = optString(symbolRef, "name");
+			}
+			if (addressText.isEmpty()) {
+				addressText = optString(symbolRef, "address");
+			}
+		}
+		if (!addressText.isEmpty()) {
+			Address address = parseAddress(program, addressText);
+			for (Symbol symbol : program.getSymbolTable().getSymbols(address)) {
+				matches.add(symbol);
+			}
+		}
+		if (!query.isEmpty()) {
+			String normalizedQuery = normalizeForSearch(query, false);
+			for (SymbolIterator iterator = program.getSymbolTable().getAllSymbols(true); iterator
+					.hasNext();) {
+				Symbol symbol = iterator.next();
+				String name = symbol.getName();
+				if (name.equals(query) || name.equalsIgnoreCase(query) ||
+					normalizeForSearch(name, false).contains(normalizedQuery)) {
+					matches.add(symbol);
+				}
+			}
+		}
+		if (matches.isEmpty() && !allowMissing) {
+			throw new BridgeException(404, "unable to resolve symbol");
+		}
+		List<Symbol> unique = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
+		for (Symbol symbol : matches) {
+			String key = symbol.getAddress().toString() + "|" + symbol.getName() + "|" +
+				symbol.getSymbolType();
+			if (seen.add(key)) {
+				unique.add(symbol);
+			}
+		}
+		final String requestedQuery = query;
+		unique.sort(Comparator
+			.comparing((Symbol symbol) -> !symbol.getName().equals(requestedQuery))
+			.thenComparing(symbol -> !symbol.getName().equalsIgnoreCase(requestedQuery))
+			.thenComparing(Symbol::isExternal)
+			.thenComparing((Symbol symbol) -> -referenceCount(program, symbol.getAddress()))
+			.thenComparing(Symbol::getName, String.CASE_INSENSITIVE_ORDER)
+			.thenComparing(symbol -> symbol.getAddress().toString()));
+		return unique;
 	}
 
 	private Address resolveEndAddress(Program program, JsonObject body, Address start) throws Exception {

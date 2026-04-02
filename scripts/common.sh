@@ -361,10 +361,17 @@ ghidra_re_notes_queue_count() {
 }
 
 ghidra_re_notes_current_context_json() {
+  local requested_session="${1:-}"
+  local requested_project="${2:-}"
+  local requested_program="${3:-}"
   local python_cmd=""
   local session_file=""
   python_cmd="$(ghidra_re_python)" || ghidra_re_die "python is required for shared notes support"
-  session_file="$(ghidra_re_bridge_current_session_file || true)"
+  if [[ -n "$requested_session" || -n "$requested_project" || -n "$requested_program" ]]; then
+    session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program" 2>/dev/null || true)"
+  else
+    session_file="$(ghidra_re_bridge_current_session_file || true)"
+  fi
   "$python_cmd" - "$session_file" "$GHIDRA_RE_PLATFORM" "$GHIDRA_RE_ROOT" <<'PY'
 import json, pathlib, subprocess, sys
 
@@ -429,6 +436,10 @@ ghidra_re_project_location() {
 
 ghidra_re_project_file() {
   printf '%s/%s/%s.gpr' "$GHIDRA_PROJECTS_DIR" "$1" "$1"
+}
+
+ghidra_re_project_rep_dir() {
+  printf '%s/%s/%s.rep' "$GHIDRA_PROJECTS_DIR" "$1" "$1"
 }
 
 ghidra_re_log_dir() {
@@ -790,9 +801,12 @@ print("true" if payload.get("ok") else "false")'
 ghidra_re_bridge_remove_current_if_matches() {
   local session_file="$1"
   local current_file=""
+  local lock_dir=""
   current_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
   if [[ -n "$current_file" && "$current_file" == "$session_file" ]]; then
+    lock_dir="$(ghidra_re_bridge_acquire_current_lock)"
     rm -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE"
+    ghidra_re_bridge_release_current_lock "$lock_dir"
   fi
 }
 
@@ -821,14 +835,54 @@ ghidra_re_bridge_latest_session_file() {
     xargs -0 ls -1t 2>/dev/null | head -n 1
 }
 
+ghidra_re_bridge_current_lock_dir() {
+  printf '%s/bridge-current.lock' "$GHIDRA_RE_BRIDGE_CONFIG_DIR"
+}
+
+ghidra_re_bridge_acquire_current_lock() {
+  local lock_dir=""
+  local attempt=0
+  lock_dir="$(ghidra_re_bridge_current_lock_dir)"
+  ghidra_re_bridge_ensure_dirs
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if (( attempt >= 100 )); then
+      ghidra_re_die "timed out waiting for bridge-current lock at $lock_dir"
+    fi
+    sleep 0.05
+  done
+  printf '%s\n' "$lock_dir"
+}
+
+ghidra_re_bridge_release_current_lock() {
+  local lock_dir="${1:-}"
+  [[ -n "$lock_dir" ]] || return 0
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
+ghidra_re_bridge_current_pointer_session_file() {
+  ghidra_re_bridge_prune_stale_sessions
+  if [[ -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE" ]]; then
+    local current_session_file=""
+    current_session_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
+    if [[ -n "$current_session_file" && -f "$current_session_file" ]]; then
+      printf '%s\n' "$current_session_file"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 ghidra_re_bridge_write_current_from_session_file() {
   local session_file="$1"
   local tmp_file=""
   local session_id=""
+  local lock_dir=""
   [[ -f "$session_file" ]] || ghidra_re_die "session file not found: $session_file"
   ghidra_re_bridge_ensure_dirs
   session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id)"
   [[ -n "$session_id" ]] || ghidra_re_die "session file is missing session_id: $session_file"
+  lock_dir="$(ghidra_re_bridge_acquire_current_lock)"
   tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.XXXXXX.tmp")"
   "$(ghidra_re_python)" - "$session_id" "$session_file" >"$tmp_file" <<'PY'
 import json, sys
@@ -842,23 +896,25 @@ payload = {
 print(json.dumps(payload, indent=2))
 PY
   mv "$tmp_file" "$GHIDRA_RE_BRIDGE_CURRENT_FILE"
+  ghidra_re_bridge_release_current_lock "$lock_dir"
 }
 
 ghidra_re_bridge_current_session_file() {
-  ghidra_re_bridge_prune_stale_sessions
-  if [[ -f "$GHIDRA_RE_BRIDGE_CURRENT_FILE" ]]; then
-    local current_session_file=""
-    current_session_file="$(ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_CURRENT_FILE" session_file || true)"
-    if [[ -n "$current_session_file" && -f "$current_session_file" ]]; then
-      printf '%s\n' "$current_session_file"
-      return 0
-    fi
+  local current=""
+  local matches=()
+  local session_file=""
+  current="$(ghidra_re_bridge_current_pointer_session_file || true)"
+  if [[ -n "$current" ]]; then
+    printf '%s\n' "$current"
+    return 0
   fi
-  local latest=""
-  latest="$(ghidra_re_bridge_latest_session_file || true)"
-  if [[ -n "$latest" && -f "$latest" ]]; then
-    ghidra_re_bridge_write_current_from_session_file "$latest"
-    printf '%s\n' "$latest"
+  ghidra_re_bridge_prune_stale_sessions
+  while IFS= read -r session_file; do
+    [[ -z "$session_file" ]] && continue
+    matches+=("$session_file")
+  done < <(ghidra_re_bridge_session_files)
+  if [[ ${#matches[@]} -eq 1 ]]; then
+    printf '%s\n' "${matches[0]}"
     return 0
   fi
   return 1
@@ -947,7 +1003,7 @@ ghidra_re_bridge_resolve_session_file() {
     printf '%s\n' "${matches[0]}"
     return 0
   fi
-  current_file="$(ghidra_re_bridge_current_session_file || true)"
+  current_file="$(ghidra_re_bridge_current_pointer_session_file || true)"
   if [[ -n "$current_file" ]]; then
     for match in "${matches[@]}"; do
       if [[ "$match" == "$current_file" ]]; then
@@ -1155,6 +1211,51 @@ ghidra_re_bridge_select_session() {
   session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program")" || return 1
   ghidra_re_bridge_write_current_from_session_file "$session_file"
   printf '%s\n' "$session_file"
+}
+
+ghidra_re_project_has_live_session() {
+  local project_name="$1"
+  local program_name="${2:-}"
+  ghidra_re_bridge_find_matching_sessions "" "$project_name" "$program_name" | grep -q .
+}
+
+ghidra_re_project_has_lock_files() {
+  local project_name="$1"
+  local project_dir=""
+  project_dir="$(ghidra_re_project_location "$project_name")"
+  [[ -f "$project_dir/$project_name.lock" || -f "$project_dir/$project_name.lock~" ]]
+}
+
+ghidra_re_create_readonly_project_snapshot() {
+  local project_name="$1"
+  local label="${2:-readonly}"
+  local source_dir=""
+  local snapshot_root=""
+  local snapshot_project_dir=""
+  local snapshot_project_name=""
+  source_dir="$(ghidra_re_project_location "$project_name")"
+  [[ -d "$source_dir" ]] || ghidra_re_die "project directory not found: $source_dir"
+  snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-project-snapshot.${project_name}.XXXXXX")"
+  snapshot_project_name="${project_name}-snapshot-$(ghidra_re_timestamp)-$(ghidra_re_sanitize_name "$label")"
+  snapshot_project_dir="$snapshot_root/$snapshot_project_name"
+  mkdir -p "$snapshot_project_dir"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a \
+      --exclude '*.lock' \
+      --exclude '*.lock~' \
+      --exclude 'tmp' \
+      "$source_dir/" "$snapshot_project_dir/"
+  else
+    cp -R "$source_dir/." "$snapshot_project_dir/"
+    find "$snapshot_project_dir" -maxdepth 1 \( -name '*.lock' -o -name '*.lock~' \) -delete
+  fi
+  if [[ -f "$snapshot_project_dir/$project_name.gpr" ]]; then
+    mv "$snapshot_project_dir/$project_name.gpr" "$snapshot_project_dir/$snapshot_project_name.gpr"
+  fi
+  if [[ -d "$snapshot_project_dir/$project_name.rep" ]]; then
+    mv "$snapshot_project_dir/$project_name.rep" "$snapshot_project_dir/$snapshot_project_name.rep"
+  fi
+  printf '%s|%s|%s\n' "$snapshot_root" "$snapshot_project_name" "$snapshot_project_dir"
 }
 
 ghidra_re_bridge_extract_selectors_from_json() {

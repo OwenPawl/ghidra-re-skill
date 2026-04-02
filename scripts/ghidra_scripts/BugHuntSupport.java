@@ -583,6 +583,40 @@ public final class BugHuntSupport {
 		return trimmed;
 	}
 
+	public static String normalizeFunctionLookupValue(String value) {
+		if (value == null) {
+			return "";
+		}
+		String normalized = value.trim().replaceAll("\\s+", " ");
+		if (normalized.startsWith("-[") || normalized.startsWith("+[")) {
+			int closeIndex = normalized.indexOf(']');
+			int spaceIndex = normalized.indexOf(' ');
+			if (spaceIndex < 0 || (closeIndex > 0 && spaceIndex > closeIndex)) {
+				int separatorIndex = normalized.indexOf('_', 2);
+				if (separatorIndex > 2 && (closeIndex < 0 || separatorIndex < closeIndex)) {
+					normalized = normalized.substring(0, separatorIndex) + " " +
+						normalized.substring(separatorIndex + 1);
+				}
+			}
+			normalized = normalized.replace("[ ", "[");
+			normalized = normalized.replace(" ]", "]");
+			normalized = normalized.replace(" :", ":");
+			normalized = normalized.replace("( ", "(");
+			normalized = normalized.replace(" )", ")");
+		}
+		return normalized;
+	}
+
+	public static boolean matchesFunctionLookup(String candidate, String query, boolean exact) {
+		String normalizedCandidate = normalizeFunctionLookupValue(candidate).toLowerCase();
+		String normalizedQuery = normalizeFunctionLookupValue(query).toLowerCase();
+		if (normalizedCandidate.isEmpty() || normalizedQuery.isEmpty()) {
+			return false;
+		}
+		return exact ? normalizedCandidate.equals(normalizedQuery) :
+			normalizedCandidate.contains(normalizedQuery);
+	}
+
 	public static Function resolveFunction(ProgramIndex index, String addressArg, String functionArg) {
 		if (addressArg != null && !addressArg.isEmpty()) {
 			try {
@@ -602,23 +636,31 @@ public final class BugHuntSupport {
 			return null;
 		}
 		Function exact = null;
+		Function normalizedExact = null;
 		Function caseInsensitive = null;
 		Function contains = null;
 		String target = functionArg.toLowerCase();
+		String normalizedTarget = normalizeFunctionLookupValue(functionArg).toLowerCase();
 		for (FunctionFacts facts : index.byKey.values()) {
 			String name = facts.name;
 			if (name.equals(functionArg)) {
 				exact = facts.function;
 				break;
 			}
+			if (normalizedExact == null &&
+				normalizeFunctionLookupValue(name).toLowerCase().equals(normalizedTarget)) {
+				normalizedExact = facts.function;
+			}
 			if (caseInsensitive == null && name.toLowerCase().equals(target)) {
 				caseInsensitive = facts.function;
 			}
-			if (contains == null && name.toLowerCase().contains(target)) {
+			if (contains == null && matchesFunctionLookup(name, functionArg, false)) {
 				contains = facts.function;
 			}
 		}
-		return exact != null ? exact : caseInsensitive != null ? caseInsensitive : contains;
+		return exact != null ? exact :
+			normalizedExact != null ? normalizedExact :
+				caseInsensitive != null ? caseInsensitive : contains;
 	}
 
 	public static String safeSlug(String raw) {

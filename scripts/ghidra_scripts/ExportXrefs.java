@@ -151,9 +151,11 @@ public class ExportXrefs extends GhidraScript {
 
 	private Function findFunctionByName(String name) {
 		Function exact = null;
+		Function normalizedExact = null;
 		Function caseInsensitive = null;
 		Function contains = null;
 		String lower = name.toLowerCase();
+		String normalizedTarget = BugHuntSupport.normalizeFunctionLookupValue(name).toLowerCase();
 		for (FunctionIterator iterator = currentProgram.getFunctionManager().getFunctions(true); iterator
 				.hasNext();) {
 			Function function = iterator.next();
@@ -162,14 +164,21 @@ public class ExportXrefs extends GhidraScript {
 				exact = function;
 				break;
 			}
+			if (normalizedExact == null &&
+				BugHuntSupport.normalizeFunctionLookupValue(functionName).toLowerCase().equals(
+					normalizedTarget)) {
+				normalizedExact = function;
+			}
 			if (caseInsensitive == null && functionName.toLowerCase().equals(lower)) {
 				caseInsensitive = function;
 			}
-			if (contains == null && functionName.toLowerCase().contains(lower)) {
+			if (contains == null && BugHuntSupport.matchesFunctionLookup(functionName, name, false)) {
 				contains = function;
 			}
 		}
-		return exact != null ? exact : caseInsensitive != null ? caseInsensitive : contains;
+		return exact != null ? exact :
+			normalizedExact != null ? normalizedExact :
+				caseInsensitive != null ? caseInsensitive : contains;
 	}
 
 	private JsonObject sampleReferences(Address address, int limit) {

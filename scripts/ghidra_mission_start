@@ -84,10 +84,17 @@ resolve_target_spec() {
   local binary_path=""
   local project_name=""
   local program_name=""
+  local identity_suffix=""
   binary_path="$(ghidra_re_resolve_binary_spec "$spec" cache || true)"
   if [[ -n "$binary_path" && -f "$binary_path" ]]; then
     program_name="$(ghidra_re_program_name_from_binary "$binary_path")"
-    project_name="${mission_slug}-$(ghidra_re_sanitize_name "$program_name")"
+    identity_suffix="$(python3 - "$binary_path" <<'PY'
+import hashlib, pathlib, sys
+value = pathlib.Path(sys.argv[1]).resolve().as_posix()
+print(hashlib.sha1(value.encode("utf-8")).hexdigest()[:8])
+PY
+)"
+    project_name="${mission_slug}-$(ghidra_re_sanitize_name "$program_name")-${identity_suffix}"
     if [[ ! -f "$(ghidra_re_project_file "$project_name")" ]]; then
       if [[ -z "${GHIDRA_IMPORT_DEMANGLE+x}" ]]; then
         GHIDRA_IMPORT_DEMANGLE=0 "$SCRIPT_DIR/ghidra_import_analyze" "$binary_path" "$project_name" >/dev/null
@@ -110,19 +117,11 @@ ensure_export_bundle() {
   local project_name="$1"
   local program_name="$2"
   local export_dir=""
-  local session_file=""
-  local session_id=""
   export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
   if [[ ! -f "$export_dir/program_summary.json" || ! -f "$export_dir/objc_metadata.json" || \
+        ! -f "$export_dir/swift_metadata.json" || \
         ! -f "$export_dir/function_inventory.json" || ! -f "$export_dir/symbols.json" || \
         ! -f "$export_dir/strings.json" ]]; then
-    session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" || true)"
-    if [[ -n "$session_file" ]]; then
-      session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id || true)"
-      if [[ -n "$session_id" ]]; then
-        "$SCRIPT_DIR/ghidra_bridge_close" "session=${session_id}" >/dev/null 2>&1 || true
-      fi
-    fi
     if [[ -z "${GHIDRA_EXPORT_DEMANGLE+x}" ]]; then
       GHIDRA_EXPORT_DEMANGLE=0 "$SCRIPT_DIR/ghidra_export_apple_bundle" "$project_name" "$program_name" >/dev/null
     else
@@ -159,6 +158,40 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+build_target_metadata_json() {
+  local target_spec="$1"
+  local binary_path="$2"
+  local export_dir="$3"
+  local program_path="$4"
+  python3 - "$target_spec" "$binary_path" "$export_dir/program_summary.json" "$program_path" <<'PY'
+import json, pathlib, sys
+
+target_spec, binary_path, summary_path, program_path = sys.argv[1:5]
+summary = {}
+path = pathlib.Path(summary_path)
+if path.is_file():
+    summary = json.loads(path.read_text(encoding="utf-8"))
+
+payload = {
+    "target_spec": target_spec,
+    "binary_path": binary_path,
+    "program_path": program_path,
+    "program_name": summary.get("program_name", ""),
+    "executable_path": summary.get("executable_path", ""),
+    "source_image_path": summary.get("source_image_path", ""),
+    "binary_sha256": summary.get("binary_sha256", ""),
+    "binary_identity": summary.get("binary_identity", ""),
+    "binary_size": summary.get("binary_size", 0),
+    "processor": summary.get("processor", ""),
+    "language_id": summary.get("language_id", ""),
+    "compiler_spec_id": summary.get("compiler_spec_id", ""),
+    "image_base": summary.get("image_base", ""),
+    "executable_md5": summary.get("executable_md5", ""),
+}
+print(json.dumps(payload))
+PY
+}
+
 for target_spec in "${targets[@]}"; do
   IFS='|' read -r binary_path project_name program_name <<<"$(resolve_target_spec "$target_spec")"
   [[ -n "$project_name" && -n "$program_name" ]] || ghidra_re_die "failed to resolve target: $target_spec"
@@ -170,6 +203,7 @@ for target_spec in "${targets[@]}"; do
   session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" || true)"
   [[ -n "$session_file" ]] || ghidra_re_die "failed to locate live session for $target_key"
   program_path="$(ghidra_re_bridge_read_value_from_file "$session_file" program_path || true)"
+  metadata_json="$(build_target_metadata_json "$target_spec" "$binary_path" "$export_dir" "$program_path")"
 
   python3 "$backend" register-target \
     --mission-dir "$mission_dir" \
@@ -178,7 +212,8 @@ for target_spec in "${targets[@]}"; do
     --program-name "$program_name" \
     --binary-path "$binary_path" \
     --program-path "$program_path" \
-    --export-dir "$export_dir" >/dev/null
+    --export-dir "$export_dir" \
+    --metadata-json "$metadata_json" >/dev/null
 
   python3 "$backend" register-session \
     --mission-dir "$mission_dir" \

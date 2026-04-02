@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 settings_dir="$(ghidra_re_bridge_settings_dir)"
 extensions_dir="$(ghidra_re_bridge_extensions_dir)"
 installed_dir="$(ghidra_re_bridge_installed_dir)"
+app_installed_dir="${GHIDRA_INSTALL_DIR}/Ghidra/Extensions/CodexGhidraBridge"
 tools_dir="$(ghidra_re_bridge_tools_dir)"
 frontend_tool_file="$settings_dir/FrontEndTool.xml"
 legacy_installed_dir="$settings_dir/Extensions/Ghidra/CodexGhidraBridge"
@@ -16,11 +17,7 @@ zip_path=""
 ghidra_re_require_tools
 ghidra_re_export_env
 
-if [[ ! -d "$GHIDRA_RE_BRIDGE_DIST_DIR" ]] || \
-   ! find "$GHIDRA_RE_BRIDGE_DIST_DIR" -maxdepth 1 -type f -name 'ghidra_*_CodexGhidraBridge.zip' | grep -q .
-then
-  "$SCRIPT_DIR/ghidra_bridge_build"
-fi
+"$SCRIPT_DIR/ghidra_bridge_build" >/dev/null
 
 zip_path="$(ghidra_re_bridge_dist_zip)"
 
@@ -43,7 +40,14 @@ with zipfile.ZipFile(zip_path) as archive:
 PY
 rm -rf "$installed_dir"
 cp -R "$tmp_root/CodexGhidraBridge" "$installed_dir"
-rm -rf "$legacy_installed_dir"
+if [[ "$legacy_installed_dir" != "$installed_dir" ]]; then
+  rm -rf "$legacy_installed_dir"
+fi
+
+if [[ -d "$(dirname "$app_installed_dir")" && -w "$(dirname "$app_installed_dir")" ]]; then
+  rm -rf "$app_installed_dir"
+  cp -R "$tmp_root/CodexGhidraBridge" "$app_installed_dir"
+fi
 
 if [[ -d "$tools_dir" ]]; then
   while IFS= read -r tool_file; do
@@ -104,5 +108,8 @@ PY
 fi
 
 printf 'Installed bridge extension to %s\n' "$installed_dir"
+if [[ -d "$app_installed_dir" ]]; then
+  printf 'Installed bridge extension to %s\n' "$app_installed_dir"
+fi
 printf 'Ghidra settings: %s\n' "$settings_dir"
 printf 'Restart Ghidra if it was already running.\n'

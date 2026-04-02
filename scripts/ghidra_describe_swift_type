@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+[[ $# -eq 3 ]] || {
+  echo "Usage: ghidra_describe_swift_type <project_name> <program_name> <type_query>" >&2
+  exit 1
+}
+
+project_name="$1"
+program_name="$2"
+type_query="$3"
+export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
+
+if [[ ! -f "$export_dir/swift_metadata.json" ]]; then
+  "$SCRIPT_DIR/ghidra_export_apple_bundle" "$project_name" "$program_name" >/dev/null
+fi
+
+python3 - "$export_dir/swift_metadata.json" "$type_query" <<'PY'
+import json, pathlib, sys
+
+swift = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+query = sys.argv[2].lower()
+
+payload = {
+    "query": sys.argv[2],
+    "types": [item for item in swift.get("types", []) if query in item.lower()],
+    "metadata_accessors": [item for item in swift.get("metadata_accessors", []) if query in item.lower()],
+    "protocol_conformances": [item for item in swift.get("protocol_conformances", []) if query in item.lower()],
+    "symbol_hits": [item for item in swift.get("symbols", []) if query in item.get("name", "").lower()],
+}
+print(json.dumps(payload, indent=2))
+PY

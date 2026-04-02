@@ -27,6 +27,9 @@ shared_note_body=""
 shared_note_category="workflow"
 shared_note_target=""
 shared_note_status="open"
+shared_note_session=""
+shared_note_project=""
+shared_note_program=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -64,6 +67,15 @@ for arg in "$@"; do
       ;;
     shared_note_status=*)
       shared_note_status="${arg#shared_note_status=}"
+      ;;
+    shared_note_session=*)
+      shared_note_session="${arg#shared_note_session=}"
+      ;;
+    shared_note_project=*)
+      shared_note_project="${arg#shared_note_project=}"
+      ;;
+    shared_note_program=*)
+      shared_note_program="${arg#shared_note_program=}"
       ;;
     -h|--help)
       usage
@@ -153,6 +165,9 @@ if [[ -n "$shared_note_title" && -n "$shared_note_body" ]]; then
     "category=$shared_note_category" \
     "target=$note_target" \
     "mission=$mission_name" \
+    "session=$shared_note_session" \
+    "project=$shared_note_project" \
+    "program=$shared_note_program" \
     "status=$shared_note_status" >/dev/null || true
 fi
 

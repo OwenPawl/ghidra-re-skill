@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_bridge_strings_search <query> [key=value ...]
+   or: ghidra_bridge_strings_search query=<query> [key=value ...]
+EOF
+}
+
+[[ $# -ge 1 ]] || {
+  usage >&2
+  exit 1
+}
+
+args=()
+if [[ "$1" == *=* ]]; then
+  args=("$@")
+else
+  args=("query=$1")
+  shift
+  while [[ $# -gt 0 ]]; do
+    args+=("$1")
+    shift
+  done
+fi
+
+body="$(ghidra_re_bridge_json_from_kv "${args[@]}")"
+"$SCRIPT_DIR/ghidra_bridge_call" /strings/search "$body"

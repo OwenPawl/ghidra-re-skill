@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 ghidra_re_bridge_prune_stale_sessions
-current_session_file="$(ghidra_re_bridge_current_session_file || true)"
+current_session_file="$(ghidra_re_bridge_current_pointer_session_file || true)"
 
 session_files=()
 while IFS= read -r session_file; do

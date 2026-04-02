@@ -31,8 +31,18 @@ log_file="$log_dir/export-${timestamp}.log"
 script_log="$log_dir/export-${timestamp}.script.log"
 script_path="$(ghidra_re_script_path)"
 analyze_headless="$(ghidra_re_analyze_headless_path)"
+working_project_name="$project_name"
+working_project_root="$(ghidra_re_project_location "$project_name")"
+snapshot_root=""
 
 mkdir -p "$export_dir" "$log_dir"
+
+cleanup() {
+  if [[ -n "$snapshot_root" && -d "$snapshot_root" ]]; then
+    rm -rf "$snapshot_root"
+  fi
+}
+trap cleanup EXIT
 
 optional_args=()
 while IFS= read -r -d '' item; do
@@ -53,8 +63,8 @@ esac
 
 cmd=(
   "$analyze_headless"
-  "$(ghidra_re_project_location "$project_name")"
-  "$project_name"
+  "$working_project_root"
+  "$working_project_name"
   -process "$program_name"
   -scriptPath "$script_path"
 )
@@ -73,11 +83,20 @@ cmd+=(
   -scriptlog "$script_log"
 )
 
+if ghidra_re_project_has_live_session "$project_name" "$program_name" || ghidra_re_project_has_lock_files "$project_name"; then
+  IFS='|' read -r snapshot_root working_project_name _ <<<"$(ghidra_re_create_readonly_project_snapshot "$project_name" "export-$program_name")"
+  working_project_root="$snapshot_root/$working_project_name"
+  cmd[1]="$working_project_root"
+  cmd[2]="$working_project_name"
+  cmd+=(-readOnly)
+fi
+
 "${cmd[@]}"
 
 expected_files=(
   "$export_dir/program_summary.json"
   "$export_dir/objc_metadata.json"
+  "$export_dir/swift_metadata.json"
   "$export_dir/function_inventory.json"
   "$export_dir/symbols.json"
   "$export_dir/strings.json"
@@ -91,6 +110,7 @@ printf 'Export dir: %s\n' "$export_dir"
 printf 'Files:\n'
 printf '  %s\n' "$export_dir/program_summary.json"
 printf '  %s\n' "$export_dir/objc_metadata.json"
+printf '  %s\n' "$export_dir/swift_metadata.json"
 printf '  %s\n' "$export_dir/function_inventory.json"
 printf '  %s\n' "$export_dir/symbols.json"
 printf '  %s\n' "$export_dir/strings.json"
