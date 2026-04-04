@@ -42,43 +42,50 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
 10. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
+11. For Swift-heavy Apple targets, generate a surface-level report before you start chasing individual mangled symbols:
+   - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
+   - `scripts/ghidra_describe_swift_type <project_name> <program_name> <TypeName>`
+12. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
-12. Generate a function dossier for a top candidate:
+13. Generate a function dossier for a top candidate:
    - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
-13. Apply a finding back into the project when you confirm something interesting:
+14. Apply a finding back into the project when you confirm something interesting:
    - `scripts/ghidra_apply_finding <project_name> <program_name> function=... title=... comment=...`
-14. Run an extra script when needed:
+15. Run an extra script when needed:
    - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
-15. Record any friction or missing-feature notes through the shared notes flow before you wrap up the session:
+16. Record any friction or missing-feature notes through the shared notes flow before you wrap up the session:
    - `scripts/ghidra_notes_add title=... body=... category=workflow`
    - `scripts/ghidra_notes_status`
    - `scripts/ghidra_notes_open_shared`
-16. Open the project in the GUI:
+17. Open the project in the GUI:
    - `scripts/ghidra_open_gui <project_name> [program_name]`
-17. Arm or reuse the live bridge when you want an interactive RE loop:
+18. Arm or reuse the live bridge when you want an interactive RE loop:
    - `scripts/ghidra_bridge_open <project_name> [program_name]`
-18. Use the live bridge wrappers for inspection or edits:
+19. Use the live bridge wrappers for inspection or edits:
    - `scripts/ghidra_bridge_current_context`
    - `scripts/ghidra_bridge_snapshot`
    - `scripts/ghidra_bridge_analyze_target <query>`
    - `scripts/ghidra_bridge_decompile_current`
    - `scripts/ghidra_bridge_functions_search <query>`
    - `scripts/ghidra_bridge_selector_trace <selector>`
+   - `scripts/ghidra_bridge_swift_search <type_or_method>`
+   - `scripts/ghidra_bridge_swift_type <TypeName>`
    - `scripts/ghidra_bridge_xrefs`
    - `scripts/ghidra_bridge_rename ...`
    - `scripts/ghidra_bridge_comment ...`
    - `scripts/ghidra_bridge_patch_bytes ...`
    - `scripts/ghidra_bridge_patch_instruction ...`
-19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
+20. Use the dyld-aware macOS import helper when a framework path comes from a live system image or extracted source root:
+   - `scripts/ghidra_import_macos_framework </System/.../Framework.framework/Framework> [project_name] [copy=cache|direct] [source=<name>]`
+21. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
    - `scripts/build_mac_desktop_share_package [output_zip]`
-20. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
+22. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
    - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
-21. On Windows, optionally import the native module after install:
+23. On Windows, optionally import the native module after install:
    - `Import-Module GhidraRe`
    - `Get-GhidraReBridgeSessions`
    - `Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/.../WorkflowKit'`
-22. Run the explicit polish pass before serious testing or publishing:
+24. Run the explicit polish pass before serious testing or publishing:
    - `scripts/ghidra_polish_release [mode=quick|release]`
 
 ## Default Workflow
@@ -114,10 +121,17 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - The bundle runs `DemangleAllScript.java` and then exports:
   - `program_summary.json`
   - `objc_metadata.json`
+  - `swift_metadata.json`
   - `function_inventory.json`
   - `symbols.json`
   - `strings.json`
+- `swift_metadata.json` now includes:
+  - demangled/raw Swift symbol pairs
+  - a stable alias map
+  - metadata-section summaries for `__swift5_*` blocks
+  - async-like entries, metadata accessors, protocol conformance hints, and dispatch-thunk tagging
 - Set `GHIDRA_EXPORT_DEMANGLE=0` when you want a faster or quieter export pass without the blanket demangle step.
+- For Swift-heavy frameworks, prefer `scripts/ghidra_swift_surface_report` before ad hoc `functions/search` calls so you start from grouped types/methods instead of raw mangled names.
 
 ### 4) Use targeted scripts for follow-up
 - Run `scripts/ghidra_export_bug_hunt_bundle` when the task is bug hunting, boundary analysis, or userland trust-boundary triage.
@@ -139,10 +153,13 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - On macOS, detached launches use a hidden `screen` keeper session so Ghidra survives after the launcher command exits and the bridge remains usable across the rest of the Codex session.
 - Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.
 - `scripts/ghidra_bridge_call` is the raw HTTP wrapper; prefer the convenience wrappers for common tasks.
+- `scripts/ghidra_bridge_open` now waits until both `/health` and `/session` succeed before it returns, so a reported armed bridge is immediately queryable.
 - `scripts/ghidra_bridge_snapshot` captures the current live session, function, decompile, references, and variables in one machine-readable artifact for later ingestion or notes.
 - Bridge snapshots now try to resolve the containing function from the current address, so mid-function cursor positions still produce a useful decompile/references bundle.
 - Most live bridge wrappers accept optional `session=<id>`, `project=<name>`, or `program=<name>` selectors.
 - Prefer `project=` or `session=` when duplicate live targets share the same `program_name`.
+- `scripts/ghidra_bridge_swift_search` combines the live bridge session with the latest export bundle so type or method queries can resolve through stable aliases and thunk/canonical addresses.
+- `scripts/ghidra_bridge_swift_type` aggregates grouped Swift type context, related strings, ObjC bridge names, metadata accessors, and the best live-analysis target when one is available.
 - Mutating bridge calls require `write=true`; destructive bridge calls also require `destructive=true`.
 - The PowerShell module mirrors the most common source, mission, and bridge commands with `Verb-GhidraRe*` functions for Windows-first usage.
 
@@ -151,8 +168,11 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 Run these wrappers from the skill directory:
 
 - `scripts/ghidra_import_analyze <binary> [project_name]`
+- `scripts/ghidra_import_macos_framework </System/.../Framework.framework[/Framework]> [project_name] [copy=cache|direct] [source=<name>]`
 - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
 - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
+- `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
+- `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
 - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
 - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
 - `scripts/ghidra_apply_finding <project_name> <program_name> <key=value args...>`
@@ -173,6 +193,8 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_bridge_analyze_target <query> [key=value ...]`
 - `scripts/ghidra_bridge_decompile_current [key=value ...]`
 - `scripts/ghidra_bridge_functions_search <query> [key=value ...]`
+- `scripts/ghidra_bridge_swift_search <type_or_method> [key=value ...]`
+- `scripts/ghidra_bridge_swift_type <TypeName> [key=value ...]`
 - `scripts/ghidra_bridge_selector_trace <selector> [key=value ...]`
 - `scripts/ghidra_bridge_xrefs [key=value ...]`
 - `scripts/ghidra_bridge_rename key=value ...`

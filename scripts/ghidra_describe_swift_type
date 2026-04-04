@@ -19,18 +19,11 @@ if [[ ! -f "$export_dir/swift_metadata.json" ]]; then
   "$SCRIPT_DIR/ghidra_export_apple_bundle" "$project_name" "$program_name" >/dev/null
 fi
 
-python3 - "$export_dir/swift_metadata.json" "$type_query" <<'PY'
-import json, pathlib, sys
-
-swift = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-query = sys.argv[2].lower()
-
-payload = {
-    "query": sys.argv[2],
-    "types": [item for item in swift.get("types", []) if query in item.lower()],
-    "metadata_accessors": [item for item in swift.get("metadata_accessors", []) if query in item.lower()],
-    "protocol_conformances": [item for item in swift.get("protocol_conformances", []) if query in item.lower()],
-    "symbol_hits": [item for item in swift.get("symbols", []) if query in item.get("name", "").lower()],
-}
-print(json.dumps(payload, indent=2))
-PY
+python_cmd="$(ghidra_re_python)" || ghidra_re_die "python is required"
+"$python_cmd" "$SCRIPT_DIR/ghidra_swift_surface_backend.py" \
+  type \
+  "$export_dir/swift_metadata.json" \
+  "$export_dir/objc_metadata.json" \
+  "$export_dir/symbols.json" \
+  "$export_dir/strings.json" \
+  "$type_query"

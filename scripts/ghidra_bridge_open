@@ -3,4 +3,37 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "$SCRIPT_DIR/ghidra_bridge_arm" "$@"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ghidra_bridge_open <project_name> [program_name]
+EOF
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+project_name="$1"
+program_name="${2:-}"
+
+output="$("$SCRIPT_DIR/ghidra_bridge_arm" "$@")"
+printf '%s\n' "$output"
+
+session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" 2>/dev/null || true)"
+[[ -n "$session_file" ]] || ghidra_re_die "bridge armed but session file could not be resolved"
+
+started="$(date +%s)"
+while true; do
+  if ghidra_re_bridge_request_file "$session_file" /health '{}' >/dev/null 2>&1 &&
+    ghidra_re_bridge_request_file "$session_file" /session '{}' >/dev/null 2>&1; then
+    printf 'Bridge ready for live queries\n'
+    break
+  fi
+  if (( "$(date +%s)" - started >= 20 )); then
+    ghidra_re_die "bridge session became visible but /health or /session never became queryable"
+  fi
+  sleep 1
+done

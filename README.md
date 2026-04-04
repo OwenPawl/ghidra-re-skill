@@ -6,12 +6,14 @@
 
 - Headless import and analysis helpers
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
+- Richer Swift exports with demangled alias maps, metadata-section recovery, and surface-level type reports
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
 - Smarter autopilot seed ranking, richer live snapshots, and mission case files for closeout
 - Function dossiers, write-back helpers, and optional bug-hunt overlays
 - A live Ghidra bridge extension for navigation, decompilation, comments, renames, and controlled program surgery
+- Dyld-aware import helpers for macOS frameworks and cache-backed Apple binaries
 - Share-package builders for handing the skill to another Mac
 
 ## Layout
@@ -212,6 +214,20 @@ The optional bug-hunt layer is still there when you want it:
 ./scripts/ghidra_function_dossier my_project BinaryName 100012340
 ```
 
+For Swift-heavy Apple frameworks, the higher-signal flow is now:
+
+```bash
+./scripts/ghidra_import_macos_framework /System/Library/PrivateFrameworks/VoiceShortcuts.framework/VoiceShortcuts
+./scripts/ghidra_export_apple_bundle VoiceShortcuts_<hash> VoiceShortcuts
+./scripts/ghidra_swift_surface_report VoiceShortcuts_<hash> VoiceShortcuts query=VoiceShortcuts. format=markdown
+./scripts/ghidra_describe_swift_type VoiceShortcuts_<hash> VoiceShortcuts VoiceShortcuts.SpotlightIndexingCoordinator
+./scripts/ghidra_bridge_open VoiceShortcuts_<hash> VoiceShortcuts
+./scripts/ghidra_bridge_swift_search 'VoiceShortcuts.EventNode'
+./scripts/ghidra_bridge_swift_type VoiceShortcuts.SpotlightIndexingCoordinator
+```
+
+`ghidra_bridge_open` now waits until both `/health` and `/session` succeed before it returns, so “bridge armed” also means “bridge is queryable.”
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.
@@ -220,6 +236,7 @@ The optional bug-hunt layer is still there when you want it:
 - Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` for analyst-friendly closeout.
 - The live bridge keeps one compatibility pointer in `bridge-current.json`, but the real session registry lives under `~/.config/ghidra-re/bridge-sessions/`.
 - The skill prefers the live bridge when an iterative GUI session is more useful than another headless export pass, and now supports selecting among multiple live targets.
+- `ExportAppleBundle.java` now emits richer `swift_metadata.json` content, including demangled/raw names, stable aliases, metadata-section summaries, async-like entries, protocol witness hints, and dispatch-thunk tagging.
 - The Windows desktop installer also installs a user PowerShell module so day-to-day Windows use does not have to start in Git Bash.
 - `ghidra_mission_finish` closes the mission's live Ghidra sessions by default, and `ghidra_bridge_close_all all=true` is the emergency cleanup button when you want every bridge-managed Ghidra window gone.
 - `ghidra_polish_release` is the explicit pre-testing pass for syntax, builders, bridge buildability, and packaging.

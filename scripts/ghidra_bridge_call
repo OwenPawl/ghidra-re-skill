@@ -47,7 +47,9 @@ case "$body_arg" in
 esac
 
 selector_values="$(ghidra_re_bridge_extract_selectors_from_json "$body")"
-IFS=$'\t' read -r requested_session requested_project requested_program <<<"$selector_values"
+requested_session="$(printf '%s' "$selector_values" | sed -n '1p')"
+requested_project="$(printf '%s' "$selector_values" | sed -n '2p')"
+requested_program="$(printf '%s' "$selector_values" | sed -n '3p')"
 session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program")"
 ghidra_re_bridge_session_healthy_file "$session_file" || \
   ghidra_re_die "bridge session at $session_file is stale or unreachable; arm or reopen that target"

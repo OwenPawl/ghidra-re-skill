@@ -873,7 +873,6 @@ ghidra_re_bridge_session_healthy_file() {
   local url=""
   local token=""
   local response=""
-  local ok=""
   [[ -f "$session_file" ]] || return 1
   if ! ghidra_re_bridge_session_pid_alive_file "$session_file"; then
     return 1
@@ -881,21 +880,45 @@ ghidra_re_bridge_session_healthy_file() {
   url="$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
   token="$(ghidra_re_bridge_read_value_from_file "$session_file" token)"
   [[ -n "$url" && -n "$token" ]] || return 1
-  response="$(curl -fsS --max-time 2 \
+  response="$(ghidra_re_bridge_request_file "$session_file" /health '{}' || true)"
+  [[ -n "$response" ]] || return 1
+  response="$(ghidra_re_bridge_request_file "$session_file" /session '{}' || true)"
+  [[ -n "$response" ]]
+}
+
+ghidra_re_bridge_request_file() {
+  local session_file="$1"
+  local endpoint="$2"
+  local body="${3-}"
+  local url=""
+  local token=""
+  local response=""
+  local python_cmd=""
+  [[ -f "$session_file" ]] || return 1
+  if [[ -z "$body" ]]; then
+    body='{}'
+  fi
+  url="$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"
+  token="$(ghidra_re_bridge_read_value_from_file "$session_file" token)"
+  [[ -n "$url" && -n "$token" ]] || return 1
+  response="$(curl -fsS --max-time 3 \
     -X POST \
     -H "Authorization: Bearer $token" \
     -H 'Content-Type: application/json' \
-    --data '{}' \
-    "$url/health" 2>/dev/null || true)"
+    --data "$body" \
+    "$url$endpoint" 2>/dev/null || true)"
   [[ -n "$response" ]] || return 1
-  ok="$(printf '%s' "$response" | "$(ghidra_re_python)" -c 'import json, sys
+  python_cmd="$(ghidra_re_python)" || return 1
+  "$python_cmd" - "$response" <<'PY'
+import json, sys
 try:
-    payload = json.loads(sys.stdin.read())
+    payload = json.loads(sys.argv[1])
 except Exception:
-    payload = {}
-print("true" if payload.get("ok") else "false")'
-)"
-  [[ "$ok" == "true" ]]
+    raise SystemExit(1)
+if not payload.get("ok"):
+    raise SystemExit(1)
+print(json.dumps(payload))
+PY
 }
 
 ghidra_re_bridge_remove_current_if_matches() {
@@ -1359,7 +1382,10 @@ ghidra_re_create_readonly_project_snapshot() {
 }
 
 ghidra_re_bridge_extract_selectors_from_json() {
-  local body="${1:-{}}"
+  local body="${1-}"
+  if [[ -z "$body" ]]; then
+    body='{}'
+  fi
   printf '%s' "$body" | "$(ghidra_re_python)" -c 'import json, sys
 try:
     payload = json.loads(sys.stdin.read())
@@ -1370,7 +1396,8 @@ selectors = [
     payload.get("project") or payload.get("project_name") or "",
     payload.get("program") or payload.get("program_name") or "",
 ]
-print("\t".join(selectors))'
+for value in selectors:
+    print(value)'
 }
 
 ghidra_re_bridge_json_from_kv() {

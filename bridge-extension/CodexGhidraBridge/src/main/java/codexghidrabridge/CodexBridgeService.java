@@ -643,10 +643,12 @@ class CodexBridgeService {
 		boolean hasExplicitTarget = optObject(body, "function_ref") != null ||
 			hasAny(body, "address", "entry", "start", "function", "function_name");
 		String query = optString(body, "query", "name");
+		Address explicitAddress = hasExplicitAddressSelector(body) ?
+			resolveExactAddress(program, body, true) : null;
 		Function function = hasExplicitTarget ? resolveFunction(program, body, true) : null;
 		JsonObject search = new JsonObject();
 		boolean includeSearch = false;
-		if (function == null) {
+		if (function == null && explicitAddress == null) {
 			if (query.isEmpty()) {
 				function = resolveFunction(program, body, true);
 			}
@@ -675,7 +677,10 @@ class CodexBridgeService {
 				}
 			}
 		}
-		Address address = function.getEntryPoint();
+		Address address = function != null ? function.getEntryPoint() : explicitAddress;
+		if (address == null) {
+			throw new BridgeException(404, "unable to resolve analysis target");
+		}
 		if (navigate) {
 			if (!plugin.navigateTo(address)) {
 				throw new BridgeException(500, "failed to navigate to " + address);
@@ -683,13 +688,15 @@ class CodexBridgeService {
 		}
 		JsonObject targetBody = new JsonObject();
 		targetBody.addProperty("address", address.toString());
-		targetBody.add("function_ref", functionRef(function));
+		if (function != null) {
+			targetBody.add("function_ref", functionRef(function));
+		}
 		JsonObject result = new JsonObject();
 		if (includeSearch) {
 			result.add("search", search);
 		}
 		result.add("context", handleContext());
-		result.add("function", functionToJson(function, true));
+		result.add("function", function == null ? JsonNull.INSTANCE : functionToJson(function, true));
 		result.add("references", handleReferences(targetBody));
 		result.add("decompile", handleDecompile(targetBody));
 		return result;
@@ -846,7 +853,14 @@ class CodexBridgeService {
 
 	private JsonElement handleDecompile(JsonObject body) throws Exception {
 		Program program = requireProgram();
-		Function function = resolveFunction(program, body);
+		Function function = resolveFunction(program, body, true);
+		if (function == null) {
+			Address address = resolveExactAddress(program, body, true);
+			if (address == null) {
+				throw new BridgeException(404, "unable to resolve function from explicit target");
+			}
+			return buildAddressDecompileFallback(program, address);
+		}
 		DecompInterface decompiler = new DecompInterface();
 		try {
 			if (!decompiler.openProgram(program)) {
@@ -870,6 +884,38 @@ class CodexBridgeService {
 		finally {
 			decompiler.dispose();
 		}
+	}
+
+	private JsonObject buildAddressDecompileFallback(Program program, Address address)
+			throws Exception {
+		JsonObject payload = new JsonObject();
+		payload.addProperty("requested_address", address.toString());
+		payload.addProperty("available", false);
+		payload.addProperty("reason", "no containing function");
+		payload.add("location_ref", locationRef(program, address));
+		Function containing = program.getFunctionManager().getFunctionContaining(address);
+		payload.add("containing_function",
+			containing == null ? JsonNull.INSTANCE : functionToJson(containing, false));
+		Instruction instruction = program.getListing().getInstructionContaining(address);
+		if (instruction != null) {
+			payload.add("instruction",
+				instructionSnapshot(program, instruction, instruction.getAddress(),
+					instructionBytes(new FlatProgramAPI(program, TaskMonitor.DUMMY), instruction)));
+		}
+		Data data = program.getListing().getDefinedDataContaining(address);
+		if (data != null) {
+			payload.add("data", dataToJson(program, data, 10));
+		}
+		Address start = address;
+		Address end = address;
+		try {
+			end = address.add(31);
+		}
+		catch (Exception ignored) {
+			end = address;
+		}
+		payload.add("range", rangeSnapshot(program, start, end));
+		return payload;
 	}
 
 	private JsonElement handleReferences(JsonObject body) throws Exception {
