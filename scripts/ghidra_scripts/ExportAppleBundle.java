@@ -56,6 +56,10 @@ public class ExportAppleBundle extends GhidraScript {
 		"(?:type metadata accessor for |nominal type descriptor for |type metadata for )(.+)$");
 	private static final Pattern SWIFT_PROTOCOL_PATTERN = Pattern.compile(
 		"(?:protocol conformance descriptor for |protocol witness for )(.+)$");
+	private static final Pattern SWIFT_PROPERTY_ENCODING_PATTERN = Pattern.compile(
+		"T@\"([A-Za-z_][A-Za-z0-9_]*)\".*?,V_([A-Za-z_][A-Za-z0-9_]*)");
+	private static final Pattern OBJC_CLASS_LITERAL_PATTERN = Pattern.compile(
+		"@\"([A-Za-z_][A-Za-z0-9_]*)\"");
 	private static final String[] SWIFT_METADATA_SECTION_NAMES = {
 		"__swift5_types",
 		"__swift5_typeref",
@@ -64,11 +68,24 @@ public class ExportAppleBundle extends GhidraScript {
 		"__swift5_reflstr",
 		"__swift5_assocty"
 	};
+	private static final String[] SWIFT_OBJC_RUNTIME_PREFIXES = {
+		"_OBJC_CLASS_$_",
+		"_OBJC_METACLASS_$_",
+		"__INSTANCE_METHODS_",
+		"__CLASS_METHODS_",
+		"__PROPERTIES_",
+		"__IVARS_",
+		"__DATA_",
+		"__METACLASS_DATA_"
+	};
 
 	private final Gson gson = new GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create();
 	private final Map<String, String> swiftDemangleCache = new HashMap<>();
+	private final Map<String, String> swiftBridgeTypeHints = new LinkedHashMap<>();
+	private final Set<String> swiftKnownTypeHints = new LinkedHashSet<>();
 	private String swiftDemangleTool = null;
 	private boolean swiftDemangleToolResolved = false;
+	private boolean swiftNameHintsResolved = false;
 
 	@Override
 	protected void run() throws Exception {
@@ -357,6 +374,8 @@ public class ExportAppleBundle extends GhidraScript {
 		JsonArray associatedConformanceRecords = new JsonArray();
 		JsonArray codeCandidates = new JsonArray();
 		JsonArray asyncRelationships = new JsonArray();
+		JsonArray runtimeArtifacts = new JsonArray();
+		JsonArray propertyRecords = new JsonArray();
 		JsonObject aliasMap = new JsonObject();
 		JsonArray aliases = new JsonArray();
 		Set<String> seen = new LinkedHashSet<>();
@@ -364,6 +383,8 @@ public class ExportAppleBundle extends GhidraScript {
 		Set<String> seenProtocolRequirementKeys = new LinkedHashSet<>();
 		Set<String> seenAssociatedConformanceKeys = new LinkedHashSet<>();
 		Set<String> seenCodeCandidateKeys = new LinkedHashSet<>();
+		Set<String> seenRuntimeArtifactKeys = new LinkedHashSet<>();
+		Set<String> seenPropertyRecordKeys = new LinkedHashSet<>();
 		List<JsonObject> swiftRecords = new ArrayList<>();
 
 		for (FunctionIterator iterator = currentProgram.getFunctionManager().getFunctions(true); iterator
@@ -386,6 +407,10 @@ public class ExportAppleBundle extends GhidraScript {
 			if (shouldExposeAsMetadataMethod(symbolJson) &&
 				seenMetadataMethodKeys.add(metadataMethodKey(symbolJson))) {
 				metadataMethods.add(symbolJson.deepCopy());
+			}
+			if (shouldExposeAsRuntimeArtifact(symbolJson) &&
+				seenRuntimeArtifactKeys.add(runtimeArtifactKey(symbolJson))) {
+				runtimeArtifacts.add(symbolJson.deepCopy());
 			}
 		}
 
@@ -411,6 +436,10 @@ public class ExportAppleBundle extends GhidraScript {
 				seenMetadataMethodKeys.add(metadataMethodKey(symbolJson))) {
 				metadataMethods.add(symbolJson.deepCopy());
 			}
+			if (shouldExposeAsRuntimeArtifact(symbolJson) &&
+				seenRuntimeArtifactKeys.add(runtimeArtifactKey(symbolJson))) {
+				runtimeArtifacts.add(symbolJson.deepCopy());
+			}
 		}
 
 		JsonObject sectionMetadata = buildSwiftMetadataSectionSummary();
@@ -418,6 +447,8 @@ public class ExportAppleBundle extends GhidraScript {
 		collectSwiftMetadataArtifacts(types, metadataMethods, protocolRequirements,
 			associatedConformanceRecords, codeCandidates, seenMetadataMethodKeys,
 			seenProtocolRequirementKeys, seenAssociatedConformanceKeys, seenCodeCandidateKeys);
+		collectSwiftPropertyArtifacts(propertyRecords, codeCandidates, seenPropertyRecordKeys,
+			seenCodeCandidateKeys);
 		asyncRelationships = buildSwiftAsyncRelationships(swiftRecords);
 
 		JsonObject payload = new JsonObject();
@@ -429,6 +460,8 @@ public class ExportAppleBundle extends GhidraScript {
 		payload.add("associated_conformances", associatedConformanceRecords);
 		payload.add("code_candidates", codeCandidates);
 		payload.add("async_relationships", asyncRelationships);
+		payload.add("runtime_artifacts", runtimeArtifacts);
+		payload.add("property_records", propertyRecords);
 		payload.add("types", toJsonArray(types));
 		payload.add("protocol_conformances", toJsonArray(protocolConformances));
 		payload.add("metadata_accessors", toJsonArray(metadataAccessors));
@@ -459,6 +492,21 @@ public class ExportAppleBundle extends GhidraScript {
 		return empty(symbolJson.get("stable_alias").getAsString()) + "|" +
 			empty(symbolJson.get("canonical_address").getAsString()) + "|" +
 			empty(symbolJson.get("address").getAsString());
+	}
+
+	private boolean shouldExposeAsRuntimeArtifact(JsonObject symbolJson) {
+		String typeName = empty(symbolJson.get("type_name").getAsString());
+		String kind = empty(symbolJson.get("symbol_kind").getAsString());
+		if (typeName.isEmpty()) {
+			return false;
+		}
+		return "runtime_artifact".equals(kind) || "symbolic_type_reference".equals(kind);
+	}
+
+	private String runtimeArtifactKey(JsonObject symbolJson) {
+		return empty(symbolJson.get("stable_alias").getAsString()) + "|" +
+			empty(symbolJson.get("address").getAsString()) + "|" +
+			empty(symbolJson.get("name").getAsString());
 	}
 
 	private void collectSwiftMetadataArtifacts(Set<String> knownTypes, JsonArray metadataMethods,
@@ -561,6 +609,67 @@ public class ExportAppleBundle extends GhidraScript {
 				empty(metadataMethod.get("stable_alias").getAsString()),
 				"metadata_method", sourceAddress, rawValue);
 		}
+	}
+
+	private void collectSwiftPropertyArtifacts(JsonArray propertyRecords, JsonArray codeCandidates,
+			Set<String> seenPropertyRecordKeys, Set<String> seenCodeCandidateKeys) {
+		DefinedStringIterator strings = DefinedStringIterator.forProgram(currentProgram, currentSelection);
+		for (Data data : strings) {
+			if (monitor.isCancelled()) {
+				break;
+			}
+			StringDataInstance stringData = StringDataInstance.getStringDataInstance(data);
+			String value = stringData == null ? "" : empty(stringData.getStringValue());
+			if (value.isEmpty()) {
+				continue;
+			}
+			JsonObject propertyRecord = buildSwiftPropertyArtifact(value, data.getAddress(), "string");
+			if (propertyRecord == null) {
+				continue;
+			}
+			String key = empty(propertyRecord.get("stable_alias").getAsString()) + "|" +
+				empty(propertyRecord.get("address").getAsString());
+			if (!seenPropertyRecordKeys.add(key)) {
+				continue;
+			}
+			propertyRecords.add(propertyRecord);
+			addSwiftCodeCandidates(codeCandidates, seenCodeCandidateKeys,
+				empty(propertyRecord.get("type_name").getAsString()),
+				empty(propertyRecord.get("stable_alias").getAsString()),
+				"property_record", data.getAddress(), value);
+		}
+	}
+
+	private JsonObject buildSwiftPropertyArtifact(String rawValue, Address sourceAddress,
+			String source) {
+		Matcher matcher = SWIFT_PROPERTY_ENCODING_PATTERN.matcher(empty(rawValue));
+		if (!matcher.find()) {
+			return null;
+		}
+		String objcBridgeName = empty(matcher.group(1));
+		String propertyName = empty(matcher.group(2));
+		if (objcBridgeName.isEmpty() || propertyName.isEmpty()) {
+			return null;
+		}
+		String typeName = guessSwiftTypeFromObjcBridgeName(objcBridgeName);
+		if (typeName.isEmpty()) {
+			return null;
+		}
+		JsonObject object = new JsonObject();
+		object.addProperty("name", rawValue);
+		object.addProperty("raw_name", rawValue);
+		object.addProperty("display_name", typeName + "." + propertyName);
+		object.addProperty("demangled", typeName + "." + propertyName);
+		object.addProperty("address", String.valueOf(sourceAddress));
+		object.addProperty("source", source);
+		object.addProperty("type_name", typeName);
+		object.addProperty("member_name", propertyName);
+		object.addProperty("stable_alias", typeName + "." + propertyName);
+		object.addProperty("symbol_kind", "property_record");
+		object.addProperty("artifact_role", "property_record");
+		object.addProperty("objc_bridge_name", objcBridgeName);
+		object.addProperty("readonly", rawValue.contains(",R,"));
+		return object;
 	}
 
 	private JsonObject buildSwiftMetadataMethodArtifact(String rawValue, Address sourceAddress,
@@ -1085,13 +1194,15 @@ public class ExportAppleBundle extends GhidraScript {
 		object.addProperty("protocol_witness", isSwiftProtocolWitness(display));
 		object.addProperty("outlined_helper", isSwiftOutlinedHelper(display));
 		object.addProperty("resume_partial", isSwiftResumePartial(display));
-		String typeName = extractSwiftTypeName(display);
-		String memberName = extractSwiftMemberName(display, typeName);
+		String typeName = extractSwiftTypeName(display, name);
+		String memberName = extractSwiftMemberName(display, typeName, name);
+		String objcBridgeName = extractObjcBridgeNameFromArtifact(name);
 		object.addProperty("type_name", typeName);
 		object.addProperty("member_name", memberName);
+		object.addProperty("objc_bridge_name", objcBridgeName);
 		object.addProperty("stable_alias",
 			buildStableSwiftAlias(typeName, memberName, display, name));
-		object.addProperty("symbol_kind", classifySwiftSymbolKind(display, memberName));
+		object.addProperty("symbol_kind", classifySwiftSymbolKind(display, memberName, name));
 		if (function != null) {
 			object.addProperty("signature", function.getPrototypeString(false, false));
 			object.addProperty("is_thunk", function.isThunk());
@@ -1405,14 +1516,6 @@ public class ExportAppleBundle extends GhidraScript {
 		return candidate;
 	}
 
-	private String shortSwiftTypeName(String value) {
-		if (value == null || value.isEmpty()) {
-			return "";
-		}
-		int index = value.lastIndexOf('.');
-		return index >= 0 ? value.substring(index + 1) : value;
-	}
-
 	private void addSwiftCodeCandidates(JsonArray codeCandidates, Set<String> seenCodeCandidateKeys,
 			String typeName, String stableAlias, String role, Address sourceAddress, String rawName) {
 		if (typeName == null || typeName.isEmpty() || sourceAddress == null) {
@@ -1652,19 +1755,27 @@ public class ExportAppleBundle extends GhidraScript {
 		if (name == null || name.isEmpty()) {
 			return "";
 		}
-		if (!name.startsWith("$s") && !name.startsWith("_$s") && !name.startsWith("So")) {
+		String candidate = name;
+		if (candidate.startsWith("_symbolic_$s")) {
+			candidate = candidate.substring("_symbolic_".length());
+		}
+		else if (candidate.startsWith("_symbolic $s")) {
+			candidate = candidate.substring("_symbolic ".length()).trim();
+		}
+		if (!candidate.startsWith("$s") && !candidate.startsWith("_$s") &&
+			!candidate.startsWith("So") && !candidate.startsWith("_Tt")) {
 			return name;
 		}
-		if (swiftDemangleCache.containsKey(name)) {
-			return swiftDemangleCache.get(name);
+		if (swiftDemangleCache.containsKey(candidate)) {
+			return swiftDemangleCache.get(candidate);
 		}
 		String tool = resolveSwiftDemangleTool();
 		if (tool.isEmpty()) {
-			swiftDemangleCache.put(name, name);
+			swiftDemangleCache.put(candidate, name);
 			return name;
 		}
 		try {
-			Process process = new ProcessBuilder(tool, "-compact", name)
+			Process process = new ProcessBuilder(tool, "-compact", candidate)
 				.redirectErrorStream(true)
 				.start();
 			String output;
@@ -1672,12 +1783,13 @@ public class ExportAppleBundle extends GhidraScript {
 				output = new String(input.readAllBytes(), StandardCharsets.UTF_8).trim();
 			}
 			int exitCode = process.waitFor();
-			String value = exitCode == 0 && !output.isEmpty() ? output : name;
-			swiftDemangleCache.put(name, value);
+			String value = exitCode == 0 && !output.isEmpty() ? normalizeDemangledSwiftOutput(output) :
+				name;
+			swiftDemangleCache.put(candidate, value);
 			return value;
 		}
 		catch (Exception ignored) {
-			swiftDemangleCache.put(name, name);
+			swiftDemangleCache.put(candidate, name);
 			return name;
 		}
 	}
@@ -1686,7 +1798,9 @@ public class ExportAppleBundle extends GhidraScript {
 		if (value == null || value.isEmpty()) {
 			return "";
 		}
-		if (value.startsWith("$s") || value.startsWith("_$s") || value.startsWith("So")) {
+		if (value.startsWith("$s") || value.startsWith("_$s") || value.startsWith("So") ||
+			value.startsWith("_Tt") || value.startsWith("_symbolic_$s") ||
+			value.startsWith("_symbolic $s")) {
 			return demangleSwiftName(value);
 		}
 		return value;
@@ -1711,6 +1825,14 @@ public class ExportAppleBundle extends GhidraScript {
 		return lower.contains("resume partial function") || lower.contains("suspend resume");
 	}
 
+	private String normalizeDemangledSwiftOutput(String value) {
+		String normalized = empty(value).trim();
+		if (normalized.startsWith("_symbolic")) {
+			normalized = normalized.substring("_symbolic".length()).trim();
+		}
+		return normalized;
+	}
+
 	private String buildStableSwiftAlias(String typeName, String memberName, String displayName,
 			String rawName) {
 		if (!typeName.isEmpty() && !memberName.isEmpty()) {
@@ -1725,7 +1847,23 @@ public class ExportAppleBundle extends GhidraScript {
 		return empty(rawName);
 	}
 
-	private String extractSwiftTypeName(String displayName) {
+	private String extractSwiftTypeName(String displayName, String rawName) {
+		String fromDisplay = extractSwiftTypeNameFromDisplay(displayName);
+		if (!fromDisplay.isEmpty()) {
+			return fromDisplay;
+		}
+		String fromRaw = extractSwiftTypeNameFromRaw(rawName);
+		if (!fromRaw.isEmpty()) {
+			return fromRaw;
+		}
+		String objcBridgeName = extractObjcBridgeNameFromArtifact(rawName);
+		if (!objcBridgeName.isEmpty()) {
+			return guessSwiftTypeFromObjcBridgeName(objcBridgeName);
+		}
+		return "";
+	}
+
+	private String extractSwiftTypeNameFromDisplay(String displayName) {
 		String normalized = stripSwiftPrefixes(displayName);
 		Matcher typeMatcher = SWIFT_TYPE_PATTERN.matcher(normalized);
 		if (typeMatcher.find()) {
@@ -1745,8 +1883,36 @@ public class ExportAppleBundle extends GhidraScript {
 		return "";
 	}
 
-	private String extractSwiftMemberName(String displayName, String typeName) {
+	private String extractSwiftTypeNameFromRaw(String rawName) {
+		String value = empty(rawName).trim();
+		if (value.isEmpty()) {
+			return "";
+		}
+		String symbolicType = extractLengthEncodedSwiftPathFromAnyOffset(value);
+		if (!symbolicType.isEmpty()) {
+			return symbolicType;
+		}
+		String demangled = demangleSwiftMetadataString(value);
+		if (!demangled.isEmpty() && !demangled.equals(value)) {
+			String fromDemangled = extractSwiftTypeNameFromDisplay(demangled);
+			if (!fromDemangled.isEmpty()) {
+				return fromDemangled;
+			}
+			if (looksLikeSwiftTypeName(demangled)) {
+				return demangled;
+			}
+		}
+		return "";
+	}
+
+	private String extractSwiftMemberName(String displayName, String typeName, String rawName) {
 		String normalized = stripSwiftPrefixes(displayName);
+		if (empty(rawName).startsWith("_symbolic")) {
+			return "";
+		}
+		if (typeName.equals(normalized)) {
+			return extractRuntimeArtifactMemberName(rawName);
+		}
 		if (!typeName.isEmpty() && normalized.startsWith(typeName + ".")) {
 			return normalized.substring(typeName.length() + 1).trim();
 		}
@@ -1756,6 +1922,13 @@ public class ExportAppleBundle extends GhidraScript {
 			if (!typeName.isEmpty() && normalized.startsWith(typeName + ".")) {
 				return normalized.substring(typeName.length() + 1).trim();
 			}
+		}
+		String runtimeArtifact = extractRuntimeArtifactMemberName(rawName);
+		if (!runtimeArtifact.isEmpty()) {
+			return runtimeArtifact;
+		}
+		if (!typeName.isEmpty() && normalized.equals(typeName)) {
+			return "";
 		}
 		return normalized;
 	}
@@ -1780,6 +1953,206 @@ public class ExportAppleBundle extends GhidraScript {
 			}
 		}
 		return value;
+	}
+
+	private String extractLengthEncodedSwiftPathFromAnyOffset(String rawValue) {
+		String value = empty(rawValue).trim();
+		for (int index = 0; index < value.length(); index++) {
+			if (!Character.isDigit(value.charAt(index))) {
+				continue;
+			}
+			String candidate = parseSwiftLengthEncodedPath(value.substring(index));
+			if (!candidate.isEmpty()) {
+				return candidate;
+			}
+		}
+		return "";
+	}
+
+	private String extractObjcBridgeNameFromArtifact(String rawValue) {
+		String value = empty(rawValue).trim();
+		if (value.isEmpty()) {
+			return "";
+		}
+		for (String prefix : SWIFT_OBJC_RUNTIME_PREFIXES) {
+			if (value.startsWith(prefix)) {
+				return value.substring(prefix.length());
+			}
+		}
+		if (value.startsWith("So")) {
+			String parsed = parseSingleLengthEncodedIdentifier(value.substring(2));
+			if (!parsed.isEmpty()) {
+				return parsed;
+			}
+		}
+		Matcher literalMatcher = OBJC_CLASS_LITERAL_PATTERN.matcher(value);
+		if (literalMatcher.find()) {
+			return empty(literalMatcher.group(1));
+		}
+		return "";
+	}
+
+	private String parseSingleLengthEncodedIdentifier(String rawValue) {
+		String value = empty(rawValue);
+		int index = 0;
+		while (index < value.length() && Character.isDigit(value.charAt(index))) {
+			index++;
+		}
+		if (index == 0) {
+			return "";
+		}
+		try {
+			int length = Integer.parseInt(value.substring(0, index));
+			if (length <= 0 || index + length > value.length()) {
+				return "";
+			}
+			return value.substring(index, index + length);
+		}
+		catch (NumberFormatException ignored) {
+			return "";
+		}
+	}
+
+	private String extractRuntimeArtifactMemberName(String rawName) {
+		String value = empty(rawName);
+		if (value.startsWith("__INSTANCE_METHODS_")) {
+			return "instanceMethods";
+		}
+		if (value.startsWith("__CLASS_METHODS_")) {
+			return "classMethods";
+		}
+		if (value.startsWith("__PROPERTIES_")) {
+			return "properties";
+		}
+		if (value.startsWith("__IVARS_")) {
+			return "ivars";
+		}
+		if (value.startsWith("__DATA_")) {
+			return "classData";
+		}
+		if (value.startsWith("__METACLASS_DATA_")) {
+			return "metaclassData";
+		}
+		if (value.startsWith("_OBJC_CLASS_$_")) {
+			return "objcClass";
+		}
+		if (value.startsWith("_OBJC_METACLASS_$_")) {
+			return "objcMetaclass";
+		}
+		return "";
+	}
+
+	private void ensureSwiftNameHints() {
+		if (swiftNameHintsResolved) {
+			return;
+		}
+		swiftNameHintsResolved = true;
+		Set<String> bridgeNames = new LinkedHashSet<>();
+
+		for (SymbolIterator iterator = currentProgram.getSymbolTable().getAllSymbols(true); iterator
+				.hasNext();) {
+			Symbol symbol = iterator.next();
+			harvestSwiftNameHints(symbol.getName(), bridgeNames);
+		}
+
+		DefinedStringIterator strings = DefinedStringIterator.forProgram(currentProgram, currentSelection);
+		for (Data data : strings) {
+			if (monitor.isCancelled()) {
+				break;
+			}
+			StringDataInstance stringData = StringDataInstance.getStringDataInstance(data);
+			String value = stringData == null ? "" : empty(stringData.getStringValue());
+			if (value.isEmpty()) {
+				continue;
+			}
+			harvestSwiftNameHints(value, bridgeNames);
+		}
+
+		for (String bridgeName : bridgeNames) {
+			String typeName = correlateSwiftTypeForBridgeName(bridgeName);
+			if (!typeName.isEmpty()) {
+				swiftBridgeTypeHints.put(bridgeName, typeName);
+			}
+		}
+	}
+
+	private void harvestSwiftNameHints(String rawValue, Set<String> bridgeNames) {
+		String value = empty(rawValue).trim();
+		if (value.isEmpty()) {
+			return;
+		}
+		String directType = extractSwiftTypeNameFromDisplay(value);
+		if (!directType.isEmpty()) {
+			swiftKnownTypeHints.add(directType);
+		}
+		String rawType = extractSwiftTypeNameFromRaw(value);
+		if (!rawType.isEmpty()) {
+			swiftKnownTypeHints.add(rawType);
+		}
+		String bridgeName = extractObjcBridgeNameFromArtifact(value);
+		if (!bridgeName.isEmpty()) {
+			bridgeNames.add(bridgeName);
+		}
+	}
+
+	private String correlateSwiftTypeForBridgeName(String bridgeName) {
+		if (bridgeName == null || bridgeName.isEmpty()) {
+			return "";
+		}
+		String best = "";
+		String normalizedBridge = normalizeLookupKey(bridgeName);
+		String normalizedCore = normalizedBridge.startsWith("swift") ?
+			normalizedBridge.substring("swift".length()) : normalizedBridge;
+		for (String typeName : swiftKnownTypeHints) {
+			String shortName = shortSwiftTypeName(typeName);
+			if (shortName.isEmpty()) {
+				continue;
+			}
+			String normalizedShort = normalizeLookupKey(shortName);
+			if (normalizedShort.isEmpty()) {
+				continue;
+			}
+			boolean match = normalizedBridge.equals(normalizedShort) ||
+				normalizedBridge.equals("swift" + normalizedShort) ||
+				normalizedCore.equals(normalizedShort) ||
+				normalizedBridge.endsWith(normalizedShort) ||
+				normalizedShort.endsWith(normalizedCore);
+			if (match && typeName.length() > best.length()) {
+				best = typeName;
+			}
+		}
+		return best;
+	}
+
+	private String guessSwiftTypeFromObjcBridgeName(String bridgeName) {
+		if (bridgeName == null || bridgeName.isEmpty()) {
+			return "";
+		}
+		ensureSwiftNameHints();
+		String direct = swiftBridgeTypeHints.get(bridgeName);
+		if (direct != null && !direct.isEmpty()) {
+			return direct;
+		}
+		return correlateSwiftTypeForBridgeName(bridgeName);
+	}
+
+	private String normalizeLookupKey(String value) {
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < value.length(); i++) {
+			char ch = Character.toLowerCase(value.charAt(i));
+			if (Character.isLetterOrDigit(ch)) {
+				builder.append(ch);
+			}
+		}
+		return builder.toString();
+	}
+
+	private String shortSwiftTypeName(String value) {
+		if (value == null || value.isEmpty()) {
+			return "";
+		}
+		int index = value.lastIndexOf('.');
+		return index >= 0 ? value.substring(index + 1) : value;
 	}
 
 	private boolean looksLikeSwiftTypeName(String value) {
@@ -1809,8 +2182,14 @@ public class ExportAppleBundle extends GhidraScript {
 			Character.isUpperCase(value.charAt(0));
 	}
 
-	private String classifySwiftSymbolKind(String displayName, String memberName) {
+	private String classifySwiftSymbolKind(String displayName, String memberName, String rawName) {
 		String lowerMember = memberName.toLowerCase(Locale.ROOT);
+		if (!extractRuntimeArtifactMemberName(rawName).isEmpty()) {
+			return "runtime_artifact";
+		}
+		if (empty(memberName).isEmpty() && empty(rawName).startsWith("_symbolic")) {
+			return "symbolic_type_reference";
+		}
 		if (isSwiftDispatchThunk(displayName)) {
 			return "dispatch_thunk";
 		}
@@ -1863,7 +2242,8 @@ public class ExportAppleBundle extends GhidraScript {
 
 	private boolean isSwiftSymbol(String name) {
 		String lower = name.toLowerCase(Locale.ROOT);
-		if (name.startsWith("$s") || name.startsWith("_$s") || lower.contains("swift") ||
+		if (name.startsWith("$s") || name.startsWith("_$s") || name.startsWith("_Tt") ||
+			name.startsWith("_symbolic") || name.startsWith("So") || lower.contains("swift") ||
 			lower.contains("type metadata") || lower.contains("protocol conformance")) {
 			return true;
 		}

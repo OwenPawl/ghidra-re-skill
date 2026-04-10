@@ -43,11 +43,16 @@ fi
 
 trace_json='{}'
 if [[ "${GHIDRA_RE_DISABLE_LIVE_BRIDGE:-0}" != "1" ]] && ghidra_re_project_has_live_session "$project_name" "$program_name"; then
-  trace_json="$("$SCRIPT_DIR/ghidra_bridge_selector_trace" \
-    "selector=$selector" \
-    "project=$project_name" \
-    "program=$program_name" \
-    "exact=true" "${extra_args[@]}" 2>/dev/null || printf '{}')"
+  bridge_args=(
+    "selector=$selector"
+    "project=$project_name"
+    "program=$program_name"
+    "exact=true"
+  )
+  if [[ ${#extra_args[@]} -gt 0 ]]; then
+    bridge_args+=("${extra_args[@]}")
+  fi
+  trace_json="$("$SCRIPT_DIR/ghidra_bridge_selector_trace" "${bridge_args[@]}" 2>/dev/null || printf '{}')"
 fi
 
 args=(

@@ -2,8 +2,15 @@
 
 import json
 import pathlib
+import re
 import sys
 from typing import Any, Dict, List, Optional
+
+OBJC_METHOD_RE = re.compile(r"^([+-])\[(.+?) ([^\]]+)\]$")
+OBJC_METHOD_BODY_RE = re.compile(r"^([+-])\[(.+)\]$")
+CANONICAL_SWIFT_TYPE_RE = re.compile(
+    r"(?:__C\.)?[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+"
+)
 
 
 def load_json(path: str) -> Dict[str, Any]:
@@ -21,6 +28,33 @@ def short_type_name(type_name: str) -> str:
 
 def normalize(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def empty_surface(type_name: str) -> Dict[str, Any]:
+    return {
+        "type_name": type_name,
+        "short_name": short_type_name(type_name),
+        "methods": [],
+        "properties": [],
+        "async_methods": [],
+        "dispatch_thunks": [],
+        "metadata_accessors": [],
+        "metadata_methods": [],
+        "protocol_witnesses": [],
+        "protocol_requirements": [],
+        "associated_types": [],
+        "associated_conformances": [],
+        "code_candidates": [],
+        "async_helpers": [],
+        "init_methods": [],
+        "deinit_methods": [],
+        "start_methods": [],
+        "raw_symbols": [],
+        "protocol_conformances": [],
+        "objc_bridge_methods": [],
+        "objc_runtime_artifacts": [],
+        "property_hints": [],
+    }
 
 
 def unique_by_key(items: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
@@ -53,22 +87,107 @@ def valid_surface_type_name(type_name: str) -> bool:
     return True
 
 
+def parse_length_encoded_path(value: str, start: int = 0) -> str:
+    parts: List[str] = []
+    index = start
+    while index < len(value) and value[index].isdigit():
+        end = index
+        while end < len(value) and value[end].isdigit():
+            end += 1
+        try:
+            declared_length = int(value[index:end])
+        except ValueError:
+            break
+        if declared_length <= 0 or end + declared_length > len(value):
+            break
+        part = value[end:end + declared_length]
+        if not part or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", part):
+            break
+        parts.append(part)
+        index = end + declared_length
+    if len(parts) >= 2:
+        return ".".join(parts)
+    return ""
+
+
+def extract_type_candidates_from_text(text: str) -> List[str]:
+    if not text:
+        return []
+    candidates = set()
+    text = text.strip()
+    for match in CANONICAL_SWIFT_TYPE_RE.finditer(text.replace("/", ".")):
+        value = match.group(0).strip(".")
+        if valid_surface_type_name(value):
+            candidates.add(value)
+    normalized = text.replace("_symbolic_", " ").replace("_symbolic ", " ").replace("/", ".")
+    for index, ch in enumerate(normalized):
+        if not ch.isdigit():
+            continue
+        value = parse_length_encoded_path(normalized, index)
+        if valid_surface_type_name(value):
+            candidates.add(value)
+    return sorted(candidates, key=str.lower)
+
+
+def parse_objc_method_name(name: str, known_classes=None) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
+    match = OBJC_METHOD_RE.match(name)
+    if not match:
+        body_match = OBJC_METHOD_BODY_RE.match(name)
+        if not body_match:
+            return None
+        kind, body = body_match.groups()
+        class_name = ""
+        selector = ""
+        for candidate in sorted(known_classes or [], key=len, reverse=True):
+            for separator in (" ", "_"):
+                prefix = candidate + separator
+                if body.startswith(prefix):
+                    class_name = candidate
+                    selector = body[len(prefix):]
+                    break
+            if class_name:
+                break
+        if not class_name and "_" in body:
+            class_name, selector = body.split("_", 1)
+        if not class_name or not selector:
+            return None
+    else:
+        kind, class_name, selector = match.groups()
+    return {
+        "kind": kind,
+        "class_name": class_name,
+        "selector": selector,
+    }
+
+
 def correlate_objc_classes(type_name: str, objc: Dict[str, Any]) -> List[str]:
     short_name = short_type_name(type_name)
     candidates = []
     for value in objc.get("classes", []):
         lowered = value.lower()
+        normalized_value = normalize(value)
+        normalized_short = normalize(short_name)
+        normalized_type = normalize(type_name)
         if value == type_name or value == short_name or value == f"Swift{short_name}":
             candidates.append(value)
             continue
         if short_name and short_name.lower() in lowered:
             candidates.append(value)
+            continue
+        if normalized_short and normalized_short in normalized_value:
+            candidates.append(value)
+            continue
+        if normalized_type and normalized_type in normalized_value:
+            candidates.append(value)
     return sorted(dict.fromkeys(candidates), key=str.lower)
 
 
-def related_strings(type_name: str, strings_doc: Dict[str, Any], limit: int = 20) -> List[Dict[str, Any]]:
+def related_strings(type_name: str, strings_doc: Dict[str, Any], extra_terms=None,
+                    limit: int = 20) -> List[Dict[str, Any]]:
     short_name = short_type_name(type_name)
-    query_terms = [term for term in [type_name, short_name] if term]
+    query_terms = [term for term in [type_name, short_name] + list(extra_terms or []) if term]
     matches: List[Dict[str, Any]] = []
     for item in strings_doc.get("strings", []):
         value = item.get("value", "")
@@ -87,9 +206,10 @@ def related_strings(type_name: str, strings_doc: Dict[str, Any], limit: int = 20
     return matches
 
 
-def related_symbols(type_name: str, symbols_doc: Dict[str, Any], limit: int = 20) -> List[Dict[str, Any]]:
+def related_symbols(type_name: str, symbols_doc: Dict[str, Any], extra_terms=None,
+                    limit: int = 20) -> List[Dict[str, Any]]:
     short_name = short_type_name(type_name)
-    query_terms = [term for term in [type_name, short_name] if term]
+    query_terms = [term for term in [type_name, short_name] + list(extra_terms or []) if term]
     matches: List[Dict[str, Any]] = []
     for item in symbols_doc.get("symbols", []):
         name = item.get("name", "")
@@ -109,64 +229,164 @@ def related_symbols(type_name: str, symbols_doc: Dict[str, Any], limit: int = 20
     return matches
 
 
-def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc: Dict[str, Any],
-                        strings_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    grouped: Dict[str, Dict[str, Any]] = {}
+def inferred_surface_types(swift: Dict[str, Any], symbols_doc: Dict[str, Any],
+                           strings_doc: Dict[str, Any]) -> List[str]:
+    candidates = set()
     for type_name in swift.get("types", []):
+        if valid_surface_type_name(type_name):
+            candidates.add(type_name)
+    for entry in swift.get("protocol_requirements", []):
+        for value in [entry.get("type_name", ""), entry.get("protocol_name", "")]:
+            if valid_surface_type_name(value):
+                candidates.add(value)
+    for entry in swift.get("associated_conformances", []):
+        for value in [
+            entry.get("type_name", ""),
+            entry.get("protocol_name", ""),
+            entry.get("conforming_type", ""),
+            entry.get("concrete_type", ""),
+        ]:
+            if valid_surface_type_name(value):
+                candidates.add(value)
+    for entry in swift.get("symbols", []):
+        for value in [entry.get("type_name", ""), entry.get("display_name", ""), entry.get("name", "")]:
+            for candidate in extract_type_candidates_from_text(value):
+                candidates.add(candidate)
+    for collection in [symbols_doc.get("symbols", []), symbols_doc.get("objc_related", [])]:
+        for entry in collection:
+            for value in [entry.get("name", ""), entry.get("demangled", ""), entry.get("display_name", "")]:
+                for candidate in extract_type_candidates_from_text(value):
+                    candidates.add(candidate)
+    for entry in strings_doc.get("strings", []):
+        value = entry.get("value", "") or entry.get("string_value", "")
+        for candidate in extract_type_candidates_from_text(value):
+            candidates.add(candidate)
+    for meta in swift.get("metadata_sections", {}).values():
+        for key in ["demangled_strings", "strings"]:
+            for value in meta.get(key, []):
+                for candidate in extract_type_candidates_from_text(value):
+                    candidates.add(candidate)
+    return sorted(candidates, key=str.lower)
+
+
+def objc_runtime_artifacts_for_type(type_name: str, objc: Dict[str, Any],
+                                    symbols_doc: Dict[str, Any],
+                                    bridge_names: List[str]) -> List[Dict[str, Any]]:
+    short_name = short_type_name(type_name)
+    normalized_terms = [normalize(value) for value in [type_name, short_name] + bridge_names if value]
+    matches = []
+    for item in symbols_doc.get("objc_related", []) + symbols_doc.get("symbols", []):
+        name = item.get("name", "")
+        text = " ".join(str(item.get(key, "")) for key in ["name", "demangled", "display_name"])
+        candidates = extract_type_candidates_from_text(text)
+        normalized_text = normalize(text)
+        matched = type_name in candidates or any(
+            term and term in normalized_text for term in normalized_terms
+        )
+        if not matched:
+            continue
+        matches.append(
+            {
+                "name": name,
+                "demangled": item.get("demangled", ""),
+                "address": item.get("address", ""),
+                "artifact_type": item.get("artifact_type", ""),
+                "xref_count": item.get("xref_count", 0),
+            }
+        )
+    return unique_by_key(matches, "name")
+
+
+def property_hints_from_strings(type_name: str, strings_doc: Dict[str, Any],
+                                extra_terms=None) -> List[Dict[str, Any]]:
+    hints = []
+    for entry in related_strings(type_name, strings_doc, extra_terms=extra_terms, limit=200):
+        value = entry.get("value", "")
+        candidates = []
+        if re.match(r"^[a-z][A-Za-z0-9_]{2,}$", value):
+            candidates.append(value)
+        for match in re.finditer(r"V_([A-Za-z_][A-Za-z0-9_]*)", value):
+            candidates.append(match.group(1))
+        if re.match(r"^_[a-z][A-Za-z0-9_]*$", value):
+            candidates.append(value[1:])
+        for candidate in candidates:
+            if candidate.lower() == short_type_name(type_name).lower():
+                continue
+            hints.append(
+                {
+                    "name": candidate,
+                    "address": entry.get("address", ""),
+                    "artifact_type": entry.get("artifact_type", ""),
+                    "xref_count": entry.get("xref_count", 0),
+                }
+            )
+    return unique_by_key(hints, "name")
+
+
+def objc_bridge_methods_for_type(type_name: str, objc: Dict[str, Any],
+                                 symbols_doc: Dict[str, Any],
+                                 bridge_names: List[str]) -> List[Dict[str, Any]]:
+    known_classes = set(objc.get("interface_classes", []) or [])
+    known_classes.update(objc.get("classes", []))
+    known_classes.update(objc.get("metaclasses", []))
+    allowed = set(bridge_names)
+    methods = []
+    for item in symbols_doc.get("objc_related", []):
+        parsed = parse_objc_method_name(item.get("name", ""), known_classes)
+        if not parsed:
+            continue
+        if parsed["class_name"] not in allowed:
+            continue
+        selector = parsed["selector"]
+        record = {
+            "name": item.get("name", ""),
+            "display_name": item.get("name", ""),
+            "demangled": item.get("name", ""),
+            "address": item.get("address", ""),
+            "canonical_address": item.get("address", ""),
+            "source": "objc_bridge",
+            "stable_alias": f"{type_name}.{selector}",
+            "member_name": selector,
+            "symbol_kind": "objc_bridge_method",
+            "objc_class_name": parsed["class_name"],
+            "xref_count": item.get("xref_count", 0),
+        }
+        methods.append(record)
+    return unique_by_key(methods, "stable_alias")
+
+
+def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc: Dict[str, Any],
+                        strings_doc: Dict[str, Any], focus_query: str = "") -> List[Dict[str, Any]]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+    inferred_types = inferred_surface_types(swift, symbols_doc, strings_doc)
+    if focus_query:
+        lowered = focus_query.lower()
+        focused = [
+            type_name
+            for type_name in inferred_types
+            if lowered == type_name.lower()
+            or lowered == short_type_name(type_name).lower()
+            or lowered in type_name.lower()
+            or lowered in short_type_name(type_name).lower()
+        ]
+        for candidate in extract_type_candidates_from_text(focus_query):
+            if candidate not in focused:
+                focused.append(candidate)
+        if valid_surface_type_name(focus_query) and focus_query not in focused:
+            focused.append(focus_query)
+        inferred_types = focused
+    allowed_type_names = set(inferred_types) if focus_query else None
+    for type_name in inferred_types:
         if not valid_surface_type_name(type_name):
             continue
-        grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        grouped.setdefault(type_name, empty_surface(type_name))
     for symbol in swift.get("symbols", []):
         type_name = symbol.get("type_name", "") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         entry = {
             "name": symbol.get("name", ""),
             "demangled": symbol.get("demangled", ""),
@@ -208,30 +428,9 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
         type_name = entry.get("type_name", "") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         record = {
             "name": entry.get("name", ""),
             "demangled": entry.get("demangled", ""),
@@ -255,34 +454,35 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
         if member_name.startswith("start(") or member_name.startswith("start()"):
             surface["start_methods"].append(record)
 
+    for entry in swift.get("property_records", []):
+        type_name = entry.get("type_name", "") or ""
+        if not valid_surface_type_name(type_name):
+            continue
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
+        record = {
+            "name": entry.get("name", ""),
+            "demangled": entry.get("demangled", ""),
+            "display_name": entry.get("display_name", ""),
+            "address": entry.get("address", ""),
+            "canonical_address": entry.get("canonical_address", entry.get("address", "")),
+            "source": entry.get("source", ""),
+            "stable_alias": entry.get("stable_alias", ""),
+            "member_name": entry.get("member_name", ""),
+            "symbol_kind": entry.get("symbol_kind", "property_record"),
+            "objc_bridge_name": entry.get("objc_bridge_name", ""),
+            "readonly": bool(entry.get("readonly", False)),
+        }
+        surface["properties"].append(record)
+
     for entry in swift.get("protocol_requirements", []):
         type_name = entry.get("type_name") or entry.get("protocol_name") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         surface["protocol_requirements"].append(entry)
         if entry.get("kind") == "associated_type":
             surface["associated_types"].append(entry)
@@ -291,60 +491,18 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
         type_name = entry.get("type_name") or entry.get("protocol_name") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         surface["associated_conformances"].append(entry)
 
     for entry in swift.get("code_candidates", []):
         type_name = entry.get("type_name", "") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         surface["code_candidates"].append(entry)
         for candidate in surface["code_candidates"]:
             if candidate.get("candidate_address") and not candidate.get("canonical_address"):
@@ -352,34 +510,32 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
             if candidate.get("candidate_address") and not candidate.get("address"):
                 candidate["address"] = candidate.get("candidate_address", "")
 
+    for entry in swift.get("runtime_artifacts", []):
+        type_name = entry.get("type_name", "") or ""
+        if not valid_surface_type_name(type_name):
+            continue
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
+        surface["objc_runtime_artifacts"].append(
+            {
+                "name": entry.get("name", ""),
+                "demangled": entry.get("demangled", ""),
+                "address": entry.get("address", ""),
+                "artifact_type": entry.get("symbol_kind", ""),
+                "xref_count": entry.get("xref_count", 0),
+                "objc_bridge_name": entry.get("objc_bridge_name", ""),
+                "stable_alias": entry.get("stable_alias", ""),
+            }
+        )
+
     for entry in swift.get("async_relationships", []):
         type_name = entry.get("type_name", "") or ""
         if not valid_surface_type_name(type_name):
             continue
-        surface = grouped.setdefault(
-            type_name,
-            {
-                "type_name": type_name,
-                "short_name": short_type_name(type_name),
-                "methods": [],
-                "properties": [],
-                "async_methods": [],
-                "dispatch_thunks": [],
-                "metadata_accessors": [],
-                "metadata_methods": [],
-                "protocol_witnesses": [],
-                "protocol_requirements": [],
-                "associated_types": [],
-                "associated_conformances": [],
-                "code_candidates": [],
-                "async_helpers": [],
-                "init_methods": [],
-                "deinit_methods": [],
-                "start_methods": [],
-                "raw_symbols": [],
-                "protocol_conformances": [],
-            },
-        )
+        if allowed_type_names is not None and type_name not in allowed_type_names:
+            continue
+        surface = grouped.setdefault(type_name, empty_surface(type_name))
         surface["async_helpers"].append(entry)
 
     conformance_hits = swift.get("protocol_conformances", [])
@@ -389,8 +545,19 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
             value for value in conformance_hits if type_name in value or short_type_name(type_name) in value
         ]
         surface["objc_bridge_names"] = correlate_objc_classes(type_name, objc)
-        surface["related_strings"] = related_strings(type_name, strings_doc)
-        surface["related_symbols"] = related_symbols(type_name, symbols_doc)
+        bridge_names = surface["objc_bridge_names"]
+        surface["related_strings"] = related_strings(type_name, strings_doc, extra_terms=bridge_names)
+        surface["related_symbols"] = related_symbols(type_name, symbols_doc, extra_terms=bridge_names)
+        surface["objc_runtime_artifacts"] = objc_runtime_artifacts_for_type(
+            type_name, objc, symbols_doc, bridge_names
+        )
+        surface["property_hints"] = property_hints_from_strings(
+            type_name, strings_doc, extra_terms=bridge_names
+        )
+        surface["objc_bridge_methods"] = objc_bridge_methods_for_type(
+            type_name, objc, symbols_doc, bridge_names
+        )
+        surface["methods"].extend(surface["objc_bridge_methods"])
         for key in [
             "methods",
             "properties",
@@ -408,6 +575,9 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
             "deinit_methods",
             "start_methods",
             "raw_symbols",
+            "objc_bridge_methods",
+            "objc_runtime_artifacts",
+            "property_hints",
         ]:
             surface[key] = unique_by_key(surface[key], "stable_alias")
         surface["summary"] = {
@@ -422,6 +592,9 @@ def build_surface_types(swift: Dict[str, Any], objc: Dict[str, Any], symbols_doc
             "associated_conformance_count": len(surface["associated_conformances"]),
             "code_candidate_count": len(surface["code_candidates"]),
             "objc_bridge_count": len(surface["objc_bridge_names"]),
+            "objc_bridge_method_count": len(surface["objc_bridge_methods"]),
+            "objc_runtime_artifact_count": len(surface["objc_runtime_artifacts"]),
+            "property_hint_count": len(surface["property_hints"]),
         }
 
     return sorted(grouped.values(), key=lambda item: item["type_name"].lower())
@@ -480,6 +653,9 @@ def search_swift_surface(surfaces: List[Dict[str, Any]], query: str) -> Dict[str
             "protocol_requirements",
             "associated_conformances",
             "code_candidates",
+            "objc_bridge_methods",
+            "objc_runtime_artifacts",
+            "property_hints",
             "init_methods",
             "deinit_methods",
             "start_methods",
@@ -547,6 +723,9 @@ def choose_live_entry(surface: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "metadata_accessors",
         "dispatch_thunks",
         "code_candidates",
+        "objc_bridge_methods",
+        "objc_runtime_artifacts",
+        "property_hints",
         "protocol_requirements",
         "associated_conformances",
         "associated_types",
@@ -561,6 +740,18 @@ def choose_live_entry(surface: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                         0 if entry.get("function_address") or entry.get("instruction_address") or entry.get("candidate_executable") else 1,
                         0 if entry.get("canonical_address") else 1,
                         entry.get("canonical_address", entry.get("candidate_address", entry.get("address", ""))),
+                    ),
+                )
+            if bucket == "objc_runtime_artifacts":
+                entries = sorted(
+                    entries,
+                    key=lambda entry: (
+                        0 if "__INSTANCE_METHODS_" in entry.get("name", "") else
+                        1 if "__PROPERTIES_" in entry.get("name", "") else
+                        2 if "__IVARS_" in entry.get("name", "") else
+                        3 if "_OBJC_CLASS_" in entry.get("name", "") else
+                        4,
+                        entry.get("name", ""),
                     ),
                 )
             return entries[0]
@@ -587,6 +778,10 @@ def render_markdown(payload: Dict[str, Any]) -> str:
         )
         if surface.get("objc_bridge_names"):
             lines.append("- objc bridges: " + ", ".join(surface["objc_bridge_names"]))
+        if surface.get("property_hints"):
+            lines.append("- property hints: " + ", ".join(
+                entry.get("name", "") for entry in surface["property_hints"][:10] if entry.get("name")
+            ))
         if surface.get("protocol_conformances"):
             lines.append("- conformances: " + ", ".join(surface["protocol_conformances"][:10]))
         if surface.get("associated_types"):
@@ -615,6 +810,9 @@ def render_markdown(payload: Dict[str, Any]) -> str:
             ("protocol_witnesses", "protocol witnesses"),
             ("protocol_requirements", "protocol requirements"),
             ("code_candidates", "code candidates"),
+            ("objc_bridge_methods", "objc bridge methods"),
+            ("objc_runtime_artifacts", "objc runtime artifacts"),
+            ("property_hints", "property hints"),
         ]:
             entries = surface.get(bucket_name, [])
             if not entries:
@@ -653,7 +851,8 @@ def main() -> int:
     query = sys.argv[6]
     output_format = sys.argv[7] if len(sys.argv) > 7 else "json"
 
-    surfaces = build_surface_types(swift, objc, symbols_doc, strings_doc)
+    focus_query = query if mode in {"type"} or (mode == "report" and query) else ""
+    surfaces = build_surface_types(swift, objc, symbols_doc, strings_doc, focus_query=focus_query)
 
     if mode == "report":
         types = surfaces if not query else [

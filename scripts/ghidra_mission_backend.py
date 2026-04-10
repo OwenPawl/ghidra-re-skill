@@ -392,6 +392,24 @@ def is_low_signal_function_name(value: str) -> bool:
     return value in exact or value.startswith(prefixes)
 
 
+def is_low_signal_selector(value: str) -> bool:
+    value = (value or "").strip()
+    if not value:
+        return True
+    exact = {
+        ".cxx_destruct",
+        "copyWithZone:",
+        "dealloc",
+        "debugDescription",
+        "description",
+        "hash",
+        "init",
+        "isEqual:",
+        "supportsSecureCoding",
+    }
+    return value in exact
+
+
 def preferred_function_label(metadata, fallback_entry="") -> str:
     metadata = metadata or {}
     name = (metadata.get("name") or "").strip()
@@ -429,6 +447,94 @@ def preferred_function_label(metadata, fallback_entry="") -> str:
         return signature
 
     return name or fallback_entry or metadata.get("entry", "") or "unknown-function"
+
+
+OBJC_METHOD_RE = re.compile(r"^([+-])\[(.+?) ([^\]]+)\]$")
+OBJC_METHOD_BODY_RE = re.compile(r"^([+-])\[(.+)\]$")
+
+
+def parse_objc_method_name(name: str, address: str = "", source: str = "symbol", known_classes=None):
+    name = (name or "").strip()
+    if not name:
+        return None
+    match = OBJC_METHOD_RE.match(name)
+    if not match:
+        body_match = OBJC_METHOD_BODY_RE.match(name)
+        if not body_match:
+            return None
+        kind, body = body_match.groups()
+        class_name = ""
+        selector = ""
+        for candidate in sorted(known_classes or [], key=len, reverse=True):
+            for separator in (" ", "_"):
+                prefix = candidate + separator
+                if body.startswith(prefix):
+                    class_name = candidate
+                    selector = body[len(prefix):]
+                    break
+            if class_name:
+                break
+        if not class_name and "_" in body:
+            class_name, selector = body.split("_", 1)
+        if not class_name or not selector:
+            return None
+    else:
+        kind, class_name, selector = match.groups()
+    return {
+        "name": name,
+        "kind": kind,
+        "class_name": class_name,
+        "selector": selector,
+        "entry": address,
+        "source": source,
+    }
+
+
+def merged_objc_methods(objc, symbols):
+    methods = []
+    seen = set()
+    known_classes = set(objc.get("interface_classes") or [])
+    known_classes.update(objc.get("classes") or [])
+    known_classes.update(objc.get("metaclasses") or [])
+    for method in objc.get("methods", []):
+        if not method.get("selector"):
+            continue
+        item = dict(method)
+        if not item.get("entry"):
+            item["entry"] = item.get("address", "")
+        key = (
+            item.get("entry", ""),
+            item.get("name", ""),
+            item.get("class_name", ""),
+            item.get("selector", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        methods.append(item)
+    for symbol in symbols.get("objc_related", []):
+        parsed = parse_objc_method_name(
+            symbol.get("name", ""),
+            symbol.get("address", ""),
+            symbol.get("source", "symbols"),
+            known_classes,
+        )
+        if not parsed:
+            continue
+        parsed["artifact_type"] = symbol.get("artifact_type", "")
+        parsed["xref_count"] = symbol.get("xref_count", 0)
+        parsed["sample_xrefs"] = symbol.get("sample_xrefs", [])
+        key = (
+            parsed.get("entry", ""),
+            parsed.get("name", ""),
+            parsed.get("class_name", ""),
+            parsed.get("selector", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        methods.append(parsed)
+    return methods
 
 
 def seed_value_for_label(label: str, metadata=None):
@@ -733,9 +839,9 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
         selector_key = global_selector_key(selector)
         upsert_node(conn, "selector", selector_key, selector, "*", {"source": "objc_metadata"})
 
-    for method in objc.get("methods", []):
+    for method in merged_objc_methods(objc, symbols):
         selector = method.get("selector", "")
-        entry = method.get("entry", "")
+        entry = method.get("entry", "") or method.get("address", "")
         class_name = method.get("class_name", "")
         if not selector or not entry:
             continue
@@ -745,11 +851,13 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
         method = dict(method)
         method["display_label"] = preferred_function_label(method, entry)
         upsert_node(conn, "function", function_key, method["display_label"], target_key, method)
-        upsert_edge(conn, "implements", function_key, selector_key, {"source": "objc_metadata", "method": method.get("name", "")}, 0.95)
+        source_name = method.get("source", "objc_metadata")
+        confidence = 0.95 if source_name == "objc_metadata" else 0.8
+        upsert_edge(conn, "implements", function_key, selector_key, {"source": source_name, "method": method.get("name", "")}, confidence)
         if class_name:
             class_key = class_node_key(target_key, class_name)
-            upsert_node(conn, "class", class_key, class_name, target_key, {"source": "objc_metadata"})
-            upsert_edge(conn, "derived-from", function_key, class_key, {"source": "objc_metadata"}, 0.85)
+            upsert_node(conn, "class", class_key, class_name, target_key, {"source": source_name})
+            upsert_edge(conn, "derived-from", function_key, class_key, {"source": source_name}, 0.85 if source_name == "objc_metadata" else 0.7)
 
     for item in symbols.get("imports", []):
         symbol_name = item.get("name", "")
@@ -948,27 +1056,59 @@ def ingest_analyze_target(conn, target_key, seed_kind, seed_value, analysis_payl
 
 
 def top_target_signals(conn, target_key, limit=6):
+    class_rows = conn.execute(
+        """
+        SELECT class.label, COUNT(*) AS method_hits
+        FROM nodes class
+        JOIN edges e ON e.dest_key = class.node_key AND e.kind = 'derived-from'
+        JOIN nodes fn ON fn.node_key = e.source_key
+        WHERE class.target_key = ?
+          AND class.kind = 'class'
+          AND fn.target_key = ?
+          AND fn.kind = 'function'
+        GROUP BY class.node_key, class.label
+        ORDER BY method_hits DESC, class.label
+        LIMIT ?
+        """,
+        (target_key, target_key, limit * 8),
+    ).fetchall()
+    classes = []
+    for row in class_rows:
+        label = row["label"]
+        if label and label not in classes:
+            classes.append(label)
+    if not classes:
+        fallback_class_rows = conn.execute(
+            """
+            SELECT label
+            FROM nodes
+            WHERE target_key = ?
+              AND kind = 'class'
+            ORDER BY label
+            LIMIT ?
+            """,
+            (target_key, limit * 8),
+        ).fetchall()
+        for row in fallback_class_rows:
+            label = row["label"]
+            if label and label not in classes:
+                classes.append(label)
+
     rows = conn.execute(
         """
         SELECT kind, label, metadata_json
         FROM nodes
         WHERE target_key = ?
-          AND kind IN ('function', 'class')
+          AND kind = 'function'
         ORDER BY
-          CASE kind WHEN 'class' THEN 0 ELSE 1 END,
           label
         LIMIT 200
         """,
         (target_key,),
     ).fetchall()
-    classes = []
     functions = []
     for row in rows:
         label = row["label"]
-        if row["kind"] == "class":
-            if label not in classes:
-                classes.append(label)
-            continue
         if is_low_signal_function_name(label):
             continue
         if label not in functions:
@@ -986,9 +1126,9 @@ def top_target_signals(conn, target_key, limit=6):
         ORDER BY hits DESC, selector.label
         LIMIT ?
         """,
-        (target_key, limit),
+        (target_key, limit * 8),
     ).fetchall()
-    selectors = [row["label"] for row in selector_rows if row["label"] not in {"description", "copyWithZone:", "init", "dealloc"}]
+    selectors = [row["label"] for row in selector_rows if not is_low_signal_selector(row["label"])]
     return {
         "top_classes": classes[:limit],
         "top_functions": functions[:limit],

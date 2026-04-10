@@ -95,8 +95,8 @@ fi
 
 platform_value="${platform:-$GHIDRA_RE_PLATFORM}"
 skill_version="$(ghidra_re_skill_version)"
-add_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-add.XXXXXX.json")"
-sync_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-sync.XXXXXX.json")"
+add_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-add.XXXXXX")"
+sync_file="$(mktemp "${TMPDIR:-/tmp}/ghidra-notes-sync.XXXXXX")"
 
 cleanup() {
   rm -f "$add_file" "$sync_file"
