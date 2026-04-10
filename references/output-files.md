@@ -9,7 +9,7 @@ Expected files:
 - `program_summary.json`
   - program-level metadata, image base, memory blocks, symbol counts, total function count, and `function_inventory_count` for comparison with the inventory file
 - `objc_metadata.json`
-  - Objective-C classes, protocols, categories, selectors, and parsed method names
+  - Objective-C classes, interface-quality class buckets, recovered protocols, categories, selectors, parsed method names, class refs, selector refs, protocol refs, and selector/classname string artifacts
 - `function_inventory.json`
   - in-program functions with addresses, signatures, parameter details, and xref counts
 - `symbols.json`
@@ -58,5 +58,22 @@ Mission-specific files:
   - human-readable mission report
 - `~/ghidra-projects/investigations/<mission_name>/exports/`
   - raw machine-readable selector traces, analysis payloads, and target manifests captured during the mission
+
+Bridge snapshot payloads also now carry export-backed context such as nearby strings, selector-like strings, nearby ObjC class names, and imported symbols when an export bundle already exists for the active target.
+
+ObjC helper outputs are intentionally composable:
+
+- `ghidra_objc_surface_report`
+  - grouped class, protocol, selector, and subsystem summaries for ObjC-heavy targets
+- `ghidra_describe_objc_class`
+  - merged class report using both `objc_metadata.json` and `symbols.json`
+- `ghidra_describe_selector`
+  - selector implementations, string hits, and optional live selector trace data
+- `ghidra_describe_objc_protocol`
+  - explicit/recovered protocol evidence and Swift-side protocol hits when available
+- `ghidra_trace_classref`
+  - classref- and symbol-oriented view of a class name
+- `ghidra_objc_message_flow`
+  - receiver-class summaries, implementation grouping, and live sender hints for a selector
 
 Use the log and script log when a script fails or a built-in behaves differently in headless mode.

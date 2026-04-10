@@ -6,13 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 [[ $# -eq 3 ]] || {
-  echo "Usage: ghidra_describe_objc_class <project_name> <program_name> <class_name>" >&2
+  echo "Usage: ghidra_describe_objc_protocol <project_name> <program_name> <protocol_name>" >&2
   exit 1
 }
 
 project_name="$1"
 program_name="$2"
-class_name="$3"
+protocol_name="$3"
 export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
 
 if [[ ! -f "$export_dir/objc_metadata.json" || ! -f "$export_dir/symbols.json" ]]; then
@@ -20,6 +20,6 @@ if [[ ! -f "$export_dir/objc_metadata.json" || ! -f "$export_dir/symbols.json" ]
 fi
 
 "$(ghidra_re_python)" "$SCRIPT_DIR/ghidra_objc_surface_backend.py" \
-  --mode class \
+  --mode protocol \
   --export-dir "$export_dir" \
-  --query "$class_name"
+  --query "$protocol_name"

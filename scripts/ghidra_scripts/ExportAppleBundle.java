@@ -200,6 +200,7 @@ public class ExportAppleBundle extends GhidraScript {
 
 	private JsonObject buildObjcMetadata() {
 		Set<String> classes = new TreeSet<>();
+		Set<String> interfaceClasses = new TreeSet<>();
 		Set<String> metaclasses = new TreeSet<>();
 		Set<String> protocols = new TreeSet<>();
 		Set<String> categories = new TreeSet<>();
@@ -210,10 +211,12 @@ public class ExportAppleBundle extends GhidraScript {
 		JsonArray selectorRefs = new JsonArray();
 		JsonArray classRefs = new JsonArray();
 		JsonArray protocolRefs = new JsonArray();
+		JsonArray recoveredProtocols = new JsonArray();
 		JsonArray classNames = new JsonArray();
 		JsonArray selectorStrings = new JsonArray();
 		Set<String> seenMethods = new LinkedHashSet<>();
 		Set<String> seenRefAddresses = new LinkedHashSet<>();
+		Set<String> seenRecoveredProtocols = new LinkedHashSet<>();
 
 		for (MemoryBlock block : currentProgram.getMemory().getBlocks()) {
 			if (block.getName() != null && block.getName().toLowerCase(Locale.ROOT).contains("objc")) {
@@ -234,13 +237,19 @@ public class ExportAppleBundle extends GhidraScript {
 			String name = symbol.getName();
 			String lower = name.toLowerCase(Locale.ROOT);
 			if (name.startsWith("_OBJC_CLASS_$_")) {
-				classes.add(name.substring("_OBJC_CLASS_$_".length()));
+				String className = name.substring("_OBJC_CLASS_$_".length());
+				classes.add(className);
+				addLikelyObjcRuntimeName(interfaceClasses, className);
 			}
 			if (name.startsWith("_OBJC_METACLASS_$_")) {
-				metaclasses.add(name.substring("_OBJC_METACLASS_$_".length()));
+				String metaclassName = name.substring("_OBJC_METACLASS_$_".length());
+				metaclasses.add(metaclassName);
 			}
 			if (name.startsWith("_OBJC_PROTOCOL_$_")) {
-				protocols.add(name.substring("_OBJC_PROTOCOL_$_".length()));
+				String protocolName = name.substring("_OBJC_PROTOCOL_$_".length());
+				protocols.add(protocolName);
+				addRecoveredProtocol(recoveredProtocols, seenRecoveredProtocols, protocols,
+					name, String.valueOf(symbol.getAddress()), "explicit_symbol");
 			}
 			if (name.startsWith("_OBJC_CATEGORY_$_")) {
 				categories.add(name.substring("_OBJC_CATEGORY_$_".length()));
@@ -254,6 +263,8 @@ public class ExportAppleBundle extends GhidraScript {
 			}
 			if (lower.contains("protocol")) {
 				addAddressRef(protocolRefs, seenRefAddresses, symbol.getAddress(), name, "symbol");
+				addRecoveredProtocol(recoveredProtocols, seenRecoveredProtocols, protocols,
+					name, String.valueOf(symbol.getAddress()), "symbol");
 			}
 			if (lower.contains("ivar")) {
 				ivars.add(name);
@@ -280,6 +291,7 @@ public class ExportAppleBundle extends GhidraScript {
 			}
 			if (blockName.contains("objc_classname")) {
 				classes.add(value);
+				addLikelyObjcRuntimeName(interfaceClasses, value);
 				addStringArtifact(classNames, data.getAddress(), value, blockName, "data");
 			}
 			if (blockName.contains("classref")) {
@@ -290,18 +302,34 @@ public class ExportAppleBundle extends GhidraScript {
 			}
 			if (blockName.contains("protocol")) {
 				addAddressRef(protocolRefs, seenRefAddresses, data.getAddress(), value, "data");
+				addRecoveredProtocol(recoveredProtocols, seenRecoveredProtocols, protocols,
+					value, String.valueOf(data.getAddress()), "data");
 			}
 			if (blockName.contains("ivar")) {
 				ivars.add(value);
 			}
 		}
 
+		Set<String> cleanClasses = filterLikelyObjcRuntimeNames(classes);
+		Set<String> cleanMetaclasses = filterLikelyObjcRuntimeNames(metaclasses);
+		if (interfaceClasses.isEmpty()) {
+			interfaceClasses.addAll(cleanClasses);
+		}
+		else {
+			interfaceClasses.addAll(cleanClasses);
+		}
+
 		JsonObject payload = new JsonObject();
 		payload.addProperty("program_name", currentProgram.getName());
 		payload.add("objc_sections", toJsonArray(objcSections));
-		payload.add("classes", toJsonArray(classes));
-		payload.add("metaclasses", toJsonArray(metaclasses));
+		payload.add("classes", toJsonArray(cleanClasses));
+		payload.add("interface_classes", toJsonArray(interfaceClasses));
+		payload.addProperty("class_source_preference", "interface_classes");
+		payload.add("metaclasses", toJsonArray(cleanMetaclasses));
 		payload.add("protocols", toJsonArray(protocols));
+		payload.add("recovered_protocols", recoveredProtocols);
+		payload.addProperty("protocol_source_preference",
+			recoveredProtocols.size() > 0 ? "protocols+recovered_protocols" : "protocols");
 		payload.add("categories", toJsonArray(categories));
 		payload.add("selectors", toJsonArray(selectors));
 		payload.add("ivars", toJsonArray(ivars));
@@ -901,6 +929,108 @@ public class ExportAppleBundle extends GhidraScript {
 		object.addProperty("block", blockName);
 		object.addProperty("source", source);
 		array.add(object);
+	}
+
+	private void addLikelyObjcRuntimeName(Set<String> values, String rawName) {
+		if (isLikelyObjcRuntimeName(rawName)) {
+			values.add(rawName);
+		}
+	}
+
+	private Set<String> filterLikelyObjcRuntimeNames(Set<String> values) {
+		Set<String> filtered = new TreeSet<>();
+		for (String value : values) {
+			if (isLikelyObjcRuntimeName(value)) {
+				filtered.add(value);
+			}
+		}
+		return filtered;
+	}
+
+	private boolean isLikelyObjcRuntimeName(String rawName) {
+		if (rawName == null) {
+			return false;
+		}
+		String value = rawName.trim();
+		if (value.isEmpty() || value.length() > 256 || value.length() == 1) {
+			return false;
+		}
+		char first = value.charAt(0);
+		if (!(Character.isLetter(first) || first == '_' || first == '$')) {
+			return false;
+		}
+		for (int i = 0; i < value.length(); i++) {
+			char ch = value.charAt(i);
+			if (Character.isISOControl(ch)) {
+				return false;
+			}
+			if (!(Character.isLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '$' ||
+				ch == ':' || ch == '+' || ch == '-')) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private void addRecoveredProtocol(JsonArray recoveredProtocols, Set<String> seenRecoveredProtocols,
+			Set<String> protocols, String rawName, String address, String source) {
+		String recoveredName = recoverObjcProtocolName(rawName);
+		if (recoveredName.isEmpty()) {
+			return;
+		}
+		String key = recoveredName + "|" + source + "|" + address;
+		if (!seenRecoveredProtocols.add(key)) {
+			return;
+		}
+		double confidence = recoveredProtocolConfidence(rawName);
+		JsonObject object = new JsonObject();
+		object.addProperty("name", recoveredName);
+		object.addProperty("raw_name", empty(rawName));
+		object.addProperty("address", empty(address));
+		object.addProperty("source", source);
+		object.addProperty("confidence", confidence);
+		recoveredProtocols.add(object);
+		if (confidence >= 0.55) {
+			protocols.add(recoveredName);
+		}
+	}
+
+	private String recoverObjcProtocolName(String rawName) {
+		String value = empty(rawName);
+		if (value.startsWith("_OBJC_PROTOCOL_$_")) {
+			return value.substring("_OBJC_PROTOCOL_$_".length());
+		}
+		if (value.startsWith("_LNSystemEntityProtocolIdentifier")) {
+			return value.substring("_LNSystemEntityProtocolIdentifier".length());
+		}
+		if (value.startsWith("_LNSystemProtocolIdentifier")) {
+			return value.substring("_LNSystemProtocolIdentifier".length());
+		}
+		if (value.startsWith("_protocol_descriptor_for_")) {
+			return value.substring("_protocol_descriptor_for_".length());
+		}
+		if (isLikelyObjcRuntimeName(value) && value.endsWith("Protocol")) {
+			return value;
+		}
+		return "";
+	}
+
+	private double recoveredProtocolConfidence(String rawName) {
+		String value = empty(rawName);
+		if (value.startsWith("_OBJC_PROTOCOL_$_")) {
+			return 1.0;
+		}
+		if (value.startsWith("_LNSystemEntityProtocolIdentifier") ||
+			value.startsWith("_LNSystemProtocolIdentifier")) {
+			return 0.7;
+		}
+		if (value.startsWith("_protocol_descriptor_for_")) {
+			return 0.65;
+		}
+		if (isLikelyObjcRuntimeName(value) && value.endsWith("Protocol")) {
+			return 0.5;
+		}
+		return 0.0;
 	}
 
 	private JsonObject swiftFunctionToJson(Function function) {

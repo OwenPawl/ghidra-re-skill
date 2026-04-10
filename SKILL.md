@@ -125,6 +125,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
   - `function_inventory.json`
   - `symbols.json`
   - `strings.json`
+- `objc_metadata.json` now includes interface-quality class buckets, categories, class refs, selector refs, protocol refs, selector strings, and recovered protocol names so ObjC-heavy Apple frameworks can be followed without reopening Ghidra immediately.
 - `swift_metadata.json` now includes:
   - demangled/raw Swift symbol pairs
   - a stable alias map
@@ -136,6 +137,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 ### 4) Use targeted scripts for follow-up
 - Run `scripts/ghidra_export_bug_hunt_bundle` when the task is bug hunting, boundary analysis, or userland trust-boundary triage.
 - Use `scripts/ghidra_function_dossier` on the top-ranked candidate paths before decompiling functions ad hoc.
+- For ObjC-heavy frameworks, start with `scripts/ghidra_objc_surface_report`, then drill into `scripts/ghidra_describe_objc_class`, `scripts/ghidra_describe_objc_protocol`, `scripts/ghidra_describe_selector`, `scripts/ghidra_trace_classref`, and `scripts/ghidra_objc_message_flow` when you need a more useful selector-level flow view.
 - Use `scripts/ghidra_apply_finding` only when you want to write comments, bookmarks, or renames back into the project.
 - Use `scripts/ghidra_notes_add` whenever the workflow exposes missing features, confusing outputs, or repetitive manual steps. The GitHub-backed shared issue is now the canonical community backlog; `references/use-case-driven-notes.md` is legacy/reference-only.
 - `DecompileFunction.java` for on-demand decompilation
@@ -173,6 +175,12 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
 - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
 - `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
+- `scripts/ghidra_objc_surface_report <project_name> <program_name> [format=json|markdown]`
+- `scripts/ghidra_describe_objc_class <project_name> <program_name> <class_name>`
+- `scripts/ghidra_describe_objc_protocol <project_name> <program_name> <protocol_name>`
+- `scripts/ghidra_describe_selector <project_name> <program_name> <selector>`
+- `scripts/ghidra_trace_classref <project_name> <program_name> <class_name>`
+- `scripts/ghidra_objc_message_flow <project_name> <program_name> <selector> [class=<ClassName>]`
 - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
 - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
 - `scripts/ghidra_apply_finding <project_name> <program_name> <key=value args...>`

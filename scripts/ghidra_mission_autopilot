@@ -245,6 +245,9 @@ payload = {
     "function_name": function_name,
     "next_hops": next_hops[:8],
     "interesting_next_hops": snapshot.get("interesting_next_hops", [])[:8],
+    "nearby_strings": [item.get("value", "") for item in snapshot.get("nearby_strings", [])[:5] if item.get("value")],
+    "nearby_selectors": [item.get("value", "") for item in snapshot.get("nearby_selectors", [])[:5] if item.get("value")],
+    "imported_symbols": [item.get("name", "") for item in snapshot.get("imported_symbols", [])[:5] if item.get("name")],
     "resolved_from_address": bool(snapshot.get("resolved_from_address")),
 }
 print(json.dumps(payload, indent=2))
@@ -272,8 +275,15 @@ payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 function_name = payload.get("function_name", "")
 target_key = payload.get("target_key", "") or "unknown target"
 reason = payload.get("reason", "")
+selectors = payload.get("nearby_selectors", [])
+imports = payload.get("imported_symbols", [])
 if function_name:
-    print(f"Autopilot followed {payload.get('seed')} into {function_name} on {target_key}. Reason: {reason}.")
+    detail = ""
+    if selectors:
+        detail = f" Nearby selectors: {', '.join(selectors[:3])}."
+    elif imports:
+        detail = f" Imported symbols in view: {', '.join(imports[:3])}."
+    print(f"Autopilot followed {payload.get('seed')} into {function_name} on {target_key}. Reason: {reason}.{detail}")
 else:
     print(f"Autopilot traced {payload.get('seed')} on {target_key}. Reason: {reason}.")
 PY
@@ -290,8 +300,12 @@ import json, pathlib, sys
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 function_name = payload.get("function_name", "")
 target_key = payload.get("target_key", "") or "current target"
+selectors = payload.get("nearby_selectors", [])
 if function_name:
-    print(f"Autopilot is currently following {payload.get('seed')} through {function_name} on {target_key}.")
+    if selectors:
+        print(f"Autopilot is currently following {payload.get('seed')} through {function_name} on {target_key}, with selectors like {', '.join(selectors[:2])} in local view.")
+    else:
+        print(f"Autopilot is currently following {payload.get('seed')} through {function_name} on {target_key}.")
 else:
     print(f"Autopilot is currently exploring {payload.get('seed')} on {target_key}.")
 PY

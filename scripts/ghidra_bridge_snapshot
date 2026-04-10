@@ -131,6 +131,38 @@ if not variables_payload.get("ok") and variables_fallback.get("ok"):
     variables_payload = variables_fallback
     resolved_from_address = True
 
+def parse_address(value):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text.startswith("EXTERNAL:"):
+        return None
+    if text.startswith("0x") or text.startswith("0X"):
+        text = text[2:]
+    if ":" in text:
+        text = text.rsplit(":", 1)[-1]
+    try:
+        return int(text, 16)
+    except Exception:
+        return None
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def unique_by(items, key_fn):
+    seen = set()
+    result = []
+    for item in items:
+        key = key_fn(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
 def is_low_signal(name):
     if not name:
         return True
@@ -145,6 +177,116 @@ for bucket in ("callees", "callers"):
             continue
         interesting_next_hops.append(name)
 
+repository = session_result.get("repository", {})
+function_result = function_payload.get("result", {}) if isinstance(function_payload, dict) else {}
+function_name = ""
+for candidate in (
+    function_result.get("name") if isinstance(function_result, dict) else "",
+    context_result.get("function_name", ""),
+    session_result.get("current_context", {}).get("function_name", ""),
+):
+    if candidate:
+        function_name = candidate
+        break
+
+focus_address = parse_address(
+    context_result.get("address", "") or
+    function_result.get("entry", "") or
+    function_result.get("address", "")
+)
+
+enriched_context = {
+    "export_dir": "",
+    "nearby_strings": [],
+    "nearby_selectors": [],
+    "nearby_objc_classes": [],
+    "imported_symbols": [],
+}
+
+project_name = repository.get("project_name", "")
+program_name = repository.get("program_name", "")
+if project_name and program_name:
+    export_dir = pathlib.Path.home() / "ghidra-projects" / "exports" / project_name / program_name
+    if export_dir.is_dir():
+        enriched_context["export_dir"] = str(export_dir)
+        strings_bundle = load_json(export_dir / "strings.json")
+        symbols_bundle = load_json(export_dir / "symbols.json")
+        objc_bundle = load_json(export_dir / "objc_metadata.json")
+        interface_classes = set(objc_bundle.get("interface_classes", []) or objc_bundle.get("classes", []))
+        selector_values = set(objc_bundle.get("selectors", []))
+
+        string_hits = []
+        for item in strings_bundle.get("strings", []):
+            value = item.get("value", "")
+            if not value:
+                continue
+            score = 0
+            xref_count = int(item.get("xref_count", 0) or 0)
+            for xref in item.get("xrefs", []):
+                if function_name and xref.get("from_function") == function_name:
+                    score += 5
+                    break
+            item_addr = parse_address(item.get("address", ""))
+            if focus_address is not None and item_addr is not None and abs(item_addr - focus_address) <= 0x400:
+                score += 2
+            if item.get("artifact_type", "").startswith("objc_"):
+                score += 1
+            if score <= 0:
+                continue
+            string_hits.append({
+                "address": item.get("address", ""),
+                "value": value,
+                "artifact_type": item.get("artifact_type", ""),
+                "metadata_group": item.get("metadata_group", ""),
+                "xref_count": xref_count,
+                "_score": score,
+            })
+
+        string_hits.sort(key=lambda item: (-item["_score"], -item.get("xref_count", 0), item.get("value", "")))
+        string_hits = unique_by(string_hits, lambda item: f"{item.get('address','')}|{item.get('value','')}")
+        for item in string_hits:
+            item.pop("_score", None)
+
+        selector_hits = [
+            item for item in string_hits
+            if item.get("artifact_type") in {"objc_selector", "objc_selref"} or item.get("value") in selector_values
+        ]
+        class_hits = [
+            item for item in string_hits
+            if item.get("artifact_type") in {"objc_classname", "objc_classref"} or item.get("value") in interface_classes
+        ]
+
+        import_hits = []
+        for bucket in ("callees", "callers"):
+            for item in references_result.get(bucket, []):
+                address = item.get("address", "") or item.get("to_address", "")
+                is_external = bool(item.get("external") or item.get("is_external") or str(address).startswith("EXTERNAL:"))
+                name = item.get("name", "")
+                if not is_external or not name or is_low_signal(name):
+                    continue
+                import_hits.append({
+                    "name": name,
+                    "address": address,
+                    "source": f"references.{bucket}",
+                })
+        for item in symbols_bundle.get("imports", []):
+            name = item.get("name", "")
+            if not name or is_low_signal(name):
+                continue
+            for xref in item.get("sample_xrefs", []):
+                if function_name and xref.get("from_function") == function_name:
+                    import_hits.append({
+                        "name": name,
+                        "address": item.get("address", ""),
+                        "source": "symbols.imports",
+                    })
+                    break
+
+        enriched_context["nearby_strings"] = string_hits[:10]
+        enriched_context["nearby_selectors"] = selector_hits[:8]
+        enriched_context["nearby_objc_classes"] = class_hits[:8]
+        enriched_context["imported_symbols"] = unique_by(import_hits, lambda item: item.get("name", ""))[:10]
+
 snapshot = {
     "snapshot_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "session": session_payload,
@@ -157,11 +299,16 @@ snapshot = {
     "repository": session_result.get("repository", {}),
     "resolved_from_address": resolved_from_address,
     "interesting_next_hops": interesting_next_hops[:10],
+    "enriched_context": enriched_context,
+    "nearby_strings": enriched_context["nearby_strings"],
+    "nearby_selectors": enriched_context["nearby_selectors"],
+    "nearby_objc_classes": enriched_context["nearby_objc_classes"],
+    "imported_symbols": enriched_context["imported_symbols"],
     "focus_summary": {
-        "project_name": session_result.get("repository", {}).get("project_name", ""),
-        "program_name": session_result.get("repository", {}).get("program_name", ""),
+        "project_name": project_name,
+        "program_name": program_name,
         "address": (context_result or session_result.get("current_context", {})).get("address", ""),
-        "function_name": (function_payload.get("result", {}) if isinstance(function_payload, dict) else {}).get("name", "") or (context_result or {}).get("function_name", ""),
+        "function_name": function_name,
     },
 }
 

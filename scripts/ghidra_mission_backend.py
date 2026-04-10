@@ -706,10 +706,28 @@ def ingest_export_bundle(conn, target_key, export_dir: Path):
         upsert_node(conn, "function", node_key, item["display_label"], target_key, item)
         upsert_edge(conn, "derived-from", node_key, framework_key, {"source": "function_inventory"}, 0.9)
 
-    for class_name in objc.get("classes", []):
+    objc_class_bucket = objc.get("interface_classes") or objc.get("classes", [])
+    for class_name in objc_class_bucket:
         class_key = class_node_key(target_key, class_name)
         upsert_node(conn, "class", class_key, class_name, target_key, {"source": "objc_metadata"})
         upsert_edge(conn, "derived-from", class_key, framework_key, {"source": "objc_metadata"}, 0.8)
+
+    seen_protocols = set()
+    for protocol_name in objc.get("protocols", []):
+        if not protocol_name or protocol_name in seen_protocols:
+            continue
+        seen_protocols.add(protocol_name)
+        protocol_key = f"protocol::{target_key}::{protocol_name}"
+        upsert_node(conn, "protocol", protocol_key, protocol_name, target_key, {"source": "objc_metadata"})
+        upsert_edge(conn, "derived-from", protocol_key, framework_key, {"source": "objc_metadata"}, 0.7)
+    for protocol_item in objc.get("recovered_protocols", []):
+        protocol_name = protocol_item.get("name", "")
+        if not protocol_name or protocol_name in seen_protocols:
+            continue
+        seen_protocols.add(protocol_name)
+        protocol_key = f"protocol::{target_key}::{protocol_name}"
+        upsert_node(conn, "protocol", protocol_key, protocol_name, target_key, protocol_item)
+        upsert_edge(conn, "derived-from", protocol_key, framework_key, {"source": "objc_metadata"}, 0.65)
 
     for selector in objc.get("selectors", []):
         selector_key = global_selector_key(selector)

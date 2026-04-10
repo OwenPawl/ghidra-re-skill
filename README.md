@@ -228,6 +228,20 @@ For Swift-heavy Apple frameworks, the higher-signal flow is now:
 
 `ghidra_bridge_open` now waits until both `/health` and `/session` succeed before it returns, so “bridge armed” also means “bridge is queryable.”
 
+For ObjC-heavy Apple frameworks or mixed Swift/ObjC subsystems, prefer:
+
+```bash
+./scripts/ghidra_export_apple_bundle workflowkit_full_dyld_extract WorkflowKit
+./scripts/ghidra_objc_surface_report workflowkit_full_dyld_extract WorkflowKit markdown
+./scripts/ghidra_describe_objc_class workflowkit_full_dyld_extract WorkflowKit WFRemoteExecutionCoordinator
+./scripts/ghidra_describe_objc_protocol workflowkit_full_dyld_extract WorkflowKit IndexedEntity
+./scripts/ghidra_describe_selector workflowkit_full_dyld_extract WorkflowKit 'handleRunRequest:service:account:fromID:context:'
+./scripts/ghidra_trace_classref workflowkit_full_dyld_extract WorkflowKit WFRemoteExecutionCoordinator
+./scripts/ghidra_objc_message_flow workflowkit_full_dyld_extract WorkflowKit 'handleRunRequest:service:account:fromID:context:' class=WFRemoteExecutionCoordinator
+```
+
+Those helpers merge the richer `symbols.json` ObjC method surface with `objc_metadata.json`, so imported-style methods like `-[WFRemoteExecutionCoordinator_handleRunRequest:...]` still show up even when the flatter metadata method bucket is incomplete. `ghidra_objc_message_flow` builds on top of that by grouping receiver classes, sibling selectors, and live sender hints when a bridge session is available.
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.
