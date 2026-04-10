@@ -10,7 +10,9 @@ usage() {
 Usage: build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]
 
 Builds a Windows-friendly share archive that can:
-  - install the ghidra-re skill into %USERPROFILE%\.codex\skills\ghidra-re
+  - install the ghidra-re skill into every detected skill host
+    (%USERPROFILE%\.codex\skills\ghidra-re for OpenAI Codex and/or
+     %USERPROFILE%\.claude\skills\ghidra-re for Anthropic Claude Code)
   - install Git for Windows with winget when Git Bash is missing
   - install Java 21 with winget when a usable JDK is missing
   - install Ghidra from an embedded zip payload or a local ghidra_*.zip placed next to the installer
@@ -109,9 +111,59 @@ $PayloadDir = Join-Path $ScriptDir "payload"
 $PackageInfoPath = Join-Path $ScriptDir "package-info.json"
 $PackageInfo = Get-Content $PackageInfoPath | ConvertFrom-Json
 
-$CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
-$InstallBase = Join-Path $CodexHome "skills"
-$TargetDir = Join-Path $InstallBase "ghidra-re"
+# Dual-host install: the ghidra-re skill works with both OpenAI Codex
+# (~/.codex/skills/ghidra-re) and Anthropic Claude Code
+# (~/.claude/skills/ghidra-re). Resolve targets from whichever host
+# directories already exist, or from the GHIDRA_RE_HOST override
+# (codex | claude | both | auto, default: auto).
+$HostChoice = if ($env:GHIDRA_RE_HOST) { $env:GHIDRA_RE_HOST } else { "auto" }
+
+function Get-GhidraReHostBases {
+  $hosts = @(
+    [pscustomobject]@{
+      Name = "codex"
+      Base = if ($env:CODEX_HOME)  { $env:CODEX_HOME }  else { Join-Path $env:USERPROFILE ".codex" }
+    },
+    [pscustomobject]@{
+      Name = "claude"
+      Base = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { Join-Path $env:USERPROFILE ".claude" }
+    }
+  )
+  return $hosts
+}
+
+function Resolve-GhidraReInstallTargets($Choice) {
+  $allHosts = Get-GhidraReHostBases
+  $normalized = ($Choice | ForEach-Object { "$_" }).ToLowerInvariant()
+  switch ($normalized) {
+    { $_ -in @("", "auto") } {
+      $detected = $allHosts | Where-Object { Test-Path $_.Base }
+      if (-not $detected) { return @($allHosts | Where-Object { $_.Name -eq "codex" }) }
+      return $detected
+    }
+    { $_ -in @("all", "both") } { return $allHosts }
+    "codex"  { return $allHosts | Where-Object { $_.Name -eq "codex" } }
+    "claude" { return $allHosts | Where-Object { $_.Name -eq "claude" } }
+    default {
+      throw "Unknown GHIDRA_RE_HOST value: $Choice (expected codex | claude | both | auto)"
+    }
+  }
+}
+
+$InstallTargets = @(Resolve-GhidraReInstallTargets $HostChoice | ForEach-Object {
+  [pscustomobject]@{
+    Name      = $_.Name
+    Base      = $_.Base
+    SkillsDir = Join-Path $_.Base "skills"
+    TargetDir = Join-Path (Join-Path $_.Base "skills") "ghidra-re"
+  }
+})
+
+# Back-compat single-target variables still referenced below during
+# bootstrap and module install. We use the first resolved target.
+$PrimaryTarget = $InstallTargets | Select-Object -First 1
+$InstallBase = $PrimaryTarget.SkillsDir
+$TargetDir = $PrimaryTarget.TargetDir
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $DefaultGhidraTarget = Join-Path $env:LOCALAPPDATA "Programs\Ghidra"
 $ConfigDir = if ($env:APPDATA) { Join-Path $env:APPDATA "ghidra-re" } else { Join-Path $env:USERPROFILE "AppData\Roaming\ghidra-re" }
@@ -321,13 +373,16 @@ function Install-GhidraRePowerShellModule {
   }
 }
 
-New-Item -ItemType Directory -Force -Path $InstallBase | Out-Null
-if (Test-Path $TargetDir) {
-  $backup = "$TargetDir.backup-$Timestamp"
-  Move-Item $TargetDir $backup -Force
-  Say "Backed up existing skill to $backup"
+foreach ($target in $InstallTargets) {
+  New-Item -ItemType Directory -Force -Path $target.SkillsDir | Out-Null
+  if (Test-Path $target.TargetDir) {
+    $backup = "$($target.TargetDir).backup-$Timestamp"
+    Move-Item $target.TargetDir $backup -Force
+    Say "Backed up existing $($target.Name) skill to $backup"
+  }
+  Copy-Item $PackageSkillDir $target.TargetDir -Recurse -Force
+  Say "Installed ghidra-re for $($target.Name) at $($target.TargetDir)"
 }
-Copy-Item $PackageSkillDir $TargetDir -Recurse -Force
 
 $bashPath = Ensure-GitBash
 $cygpathPath = Find-Cygpath $bashPath
@@ -345,7 +400,10 @@ $bootstrapBashPath = To-BashPath $bootstrapPath $cygpathPath
 Say "Running bootstrap from Git Bash"
 & $bashPath -lc "export GHIDRA_INSTALL_DIR='$(To-BashPath $ghidraDir $cygpathPath)'; export GHIDRA_JDK='$(To-BashPath $jdkDir $cygpathPath)'; '$bootstrapBashPath'"
 
-Say "Installed ghidra-re to $TargetDir"
+Say "Primary skill target: $TargetDir"
+foreach ($target in $InstallTargets) {
+  Say "  - $($target.Name) -> $($target.TargetDir)"
+}
 Say "Ghidra: $ghidraDir"
 Say "JDK: $jdkDir"
 Say "PowerShell module: GhidraRe"
@@ -363,7 +421,11 @@ ghidra-re Windows desktop share package
 1. Unzip this archive on the Windows machine.
 2. Double-click "Install Ghidra RE.cmd".
 3. The installer will:
-   - copy the skill into %USERPROFILE%\.codex\skills\ghidra-re
+   - copy the skill into every detected skill host
+     (%USERPROFILE%\.codex\skills\ghidra-re and/or
+      %USERPROFILE%\.claude\skills\ghidra-re). Force a specific host by
+     setting the GHIDRA_RE_HOST env var to "codex", "claude", or "both"
+     before launching the installer.
    - install the GhidraRe PowerShell module into your user module paths
    - install Git for Windows with winget if Git Bash is missing
    - install Java 21 with winget if a usable JDK is missing

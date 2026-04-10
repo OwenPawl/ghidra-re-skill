@@ -28,6 +28,16 @@ case "$(uname -s)" in
 esac
 
 GHIDRA_RE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load the unified skill-host resolution layer so every script that sources
+# common.sh can reason about Codex vs Claude Code install locations without
+# duplicating logic. See scripts/lib/skill_host.sh for the full API.
+if [[ -f "$GHIDRA_RE_ROOT/scripts/lib/skill_host.sh" ]]; then
+  # shellcheck source=lib/skill_host.sh
+  source "$GHIDRA_RE_ROOT/scripts/lib/skill_host.sh"
+  GHIDRA_RE_SKILL_HOST="${GHIDRA_RE_SKILL_HOST:-$(ghidra_re_host_identify_root "$GHIDRA_RE_ROOT" || printf '')}"
+fi
+
 GHIDRA_RE_PLATFORM="${GHIDRA_RE_PLATFORM:-$GHIDRA_RE_PLATFORM_DEFAULT}"
 GHIDRA_RE_CONFIG_HOME="${GHIDRA_RE_CONFIG_HOME:-$GHIDRA_RE_CONFIG_HOME_DEFAULT}"
 GHIDRA_RE_DEFAULT_USER_CONFIG="$GHIDRA_RE_CONFIG_HOME/config.env"
