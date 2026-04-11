@@ -51,7 +51,11 @@ if ghidra_re_ghidra_running; then
 fi
 
 if ghidra_re_ghidra_running; then
-  printf 'Launching a detached Ghidra instance for %s\n' "$project_name"
+  if [[ -n "$(ghidra_re_bridge_install_timestamp)" ]]; then
+    printf 'Running Ghidra did not expose a post-install bridge session; launching a detached Ghidra instance for %s\n' "$project_name"
+  else
+    printf 'Launching a detached Ghidra instance for %s\n' "$project_name"
+  fi
   ghidra_re_launch_gui_project "$project_file" new-instance
 else
   printf 'Launching Ghidra for %s\n' "$project_name"

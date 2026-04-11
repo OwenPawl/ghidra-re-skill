@@ -138,6 +138,7 @@ class CodexBridgeService {
 		"/datatypes/search",
 		"/objc/selector-trace",
 		"/navigate",
+		"/program/save",
 		"/edit/rename",
 		"/edit/comment",
 		"/edit/bookmark",
@@ -539,6 +540,8 @@ class CodexBridgeService {
 				return handleObjcSelectorTrace(body);
 			case "/navigate":
 				return handleNavigate(body);
+			case "/program/save":
+				return handleProgramSave(body);
 			case "/edit/rename":
 				return handleEditRename(body);
 			case "/edit/comment":
@@ -1127,6 +1130,35 @@ class CodexBridgeService {
 		JsonObject result = new JsonObject();
 		result.add("location_ref", locationRef(program, address));
 		result.add("context", handleContext());
+		return result;
+	}
+
+	private JsonElement handleProgramSave(JsonObject body) throws Exception {
+		Program program = requireProgram();
+		requireWriteFlags(body, false);
+		ensureWritable(program);
+		RepositoryState before = repositoryStateFor(program);
+		String description = optString(body, "description", "comment", "message");
+		if (description.isEmpty()) {
+			description = "CodexBridge: program-save";
+		}
+		try {
+			if (before.canSave && before.changed) {
+				program.save(description, TaskMonitor.DUMMY);
+			}
+		}
+		catch (Exception e) {
+			throw new BridgeException(500, "program save failed: " + e.getMessage());
+		}
+		plugin.incrementState("program-save");
+		updateSessionIfArmed();
+		RepositoryState after = repositoryStateFor(program);
+		JsonObject result = new JsonObject();
+		result.addProperty("saved", !after.changed);
+		result.addProperty("changed_before", before.changed);
+		result.addProperty("changed_after", after.changed);
+		result.addProperty("description", description);
+		result.add("repository", repositoryToJson(after));
 		return result;
 	}
 

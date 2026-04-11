@@ -242,7 +242,10 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		while (iter.hasNext() && !monitor.isCancelled()) {
 			Function fn = iter.next();
 			String name = fn.getName();
-			if (!name.startsWith("_OUTLINED_FUNCTION_")) continue;
+			boolean unresolvedOutlined = name.startsWith("_OUTLINED_FUNCTION_");
+			boolean existingAuthStub = name.startsWith("outlined$authstub$") ||
+				name.startsWith("outlined_authstub_");
+			if (!unresolvedOutlined && !existingAuthStub) continue;
 			total++;
 
 			// Read instructions
@@ -276,6 +279,13 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			int idx = categoryIndex.merge(category, 0, (a, b2) -> a + 1);
 			String newName = "outlined$" + category + "$" + String.format("%04d", idx);
 
+			if (isStub) {
+				String descriptor = resolveAuthStubDescriptor(fn, listing);
+				if (descriptor != null && !descriptor.isEmpty()) {
+					newName = "outlined$authstub$" + descriptor;
+				}
+			}
+
 			// For PAC tail calls: resolve the branch target and embed callee name.
 			// Only use the callee name when it is a real symbol (not FUN_xxxx or
 			// another _OUTLINED_FUNCTION_ which hasn't been renamed yet).
@@ -285,11 +295,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 						&& !calleeName.isEmpty()
 						&& !calleeName.startsWith("FUN_")
 						&& !calleeName.startsWith("_OUTLINED_FUNCTION_")) {
-					// Sanitise: collapse special chars, trim length
-					String safe = calleeName.replaceAll("[^A-Za-z0-9_$]", "_");
-					if (safe.startsWith("_")) safe = safe.substring(1);
-					if (safe.length() > 60) safe = safe.substring(0, 60);
-					newName = "outlined$" + category + "$" + safe;
+					newName = "outlined$" + category + "$" + sanitizeNameFragment(calleeName, 60);
 				}
 			}
 
@@ -394,6 +400,55 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			// best-effort — ignore
 		}
 		return null;
+	}
+
+	private String resolveAuthStubDescriptor(Function fn, Listing listing) {
+		try {
+			InstructionIterator insns = listing.getInstructions(fn.getBody(), true);
+			while (insns.hasNext()) {
+				Instruction insn = insns.next();
+				String mnemonic = insn.getMnemonicString().toLowerCase();
+				if (!mnemonic.startsWith("ldr")) {
+					continue;
+				}
+				for (Reference ref : insn.getReferencesFrom()) {
+					if (!ref.getReferenceType().isRead()) {
+						continue;
+					}
+					Address slot = ref.getToAddress();
+					if (slot == null) {
+						continue;
+					}
+					Symbol symbol = currentProgram.getSymbolTable().getPrimarySymbol(slot);
+					if (symbol != null) {
+						String symbolName = symbol.getName();
+						if (symbolName != null
+								&& !symbolName.isEmpty()
+								&& !symbolName.startsWith("DAT_")
+								&& !symbolName.startsWith("PTR_")
+								&& !symbolName.startsWith("UNK_")) {
+							return sanitizeNameFragment(symbolName, 80);
+						}
+					}
+					return "slot_" + sanitizeNameFragment(slot.toString(), 48);
+				}
+			}
+		}
+		catch (Exception e) {
+			// best-effort — ignore
+		}
+		return null;
+	}
+
+	private String sanitizeNameFragment(String value, int maxLength) {
+		String safe = value.replaceAll("[^A-Za-z0-9_$]", "_");
+		while (safe.startsWith("_")) {
+			safe = safe.substring(1);
+		}
+		if (safe.length() > maxLength) {
+			safe = safe.substring(0, maxLength);
+		}
+		return safe;
 	}
 
 	// -------------------------------------------------------------------------

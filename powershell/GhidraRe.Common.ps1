@@ -19,33 +19,12 @@ function Resolve-GhidraReSkillRoot {
         $candidates += (Join-Path $PSScriptRoot "..")
     }
 
-    # ghidra-re is installable under any "skill host" that follows the
-    # ~/.<host>/skills/<skill>/SKILL.md convention. We currently probe both
-    # OpenAI Codex and Anthropic Claude Code. Resolution order matters:
-    # whichever host the caller already pointed at via env vars wins first,
-    # then we fall back to on-disk probes.
-    $skillHosts = @(
-        @{
-            Name    = "codex"
-            EnvVar  = "CODEX_HOME"
-            Default = ".codex"
-        },
-        @{
-            Name    = "claude"
-            EnvVar  = "CLAUDE_HOME"
-            Default = ".claude"
-        }
-    )
-
-    foreach ($hostInfo in $skillHosts) {
-        $envValue = [System.Environment]::GetEnvironmentVariable($hostInfo.EnvVar)
-        $hostHome = if ($envValue) {
-            $envValue
-        } else {
-            Join-Path $HOME $hostInfo.Default
-        }
-        $candidates += (Join-Path $hostHome "skills\ghidra-re")
+    $codexHome = if ($env:CODEX_HOME) {
+        $env:CODEX_HOME
+    } else {
+        Join-Path $HOME ".codex"
     }
+    $candidates += (Join-Path $codexHome "skills\ghidra-re")
 
     foreach ($candidate in $candidates) {
         if (-not $candidate) {

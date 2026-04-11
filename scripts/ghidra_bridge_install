@@ -13,6 +13,7 @@ tools_dir="$(ghidra_re_bridge_tools_dir)"
 frontend_tool_file="$settings_dir/FrontEndTool.xml"
 legacy_installed_dir="$settings_dir/Extensions/Ghidra/CodexGhidraBridge"
 zip_path=""
+installed_at=""
 
 ghidra_re_require_tools
 ghidra_re_export_env
@@ -20,6 +21,11 @@ ghidra_re_export_env
 "$SCRIPT_DIR/ghidra_bridge_build" >/dev/null
 
 zip_path="$(ghidra_re_bridge_dist_zip)"
+installed_at="$("$(ghidra_re_python)" - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+PY
+)"
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/ghidra-bridge-install.XXXXXX")"
 cleanup() {
@@ -106,6 +112,23 @@ if xml != original:
     path.write_text(xml, encoding="utf-8")
 PY
 fi
+
+"$(ghidra_re_python)" - "$GHIDRA_RE_BRIDGE_INSTALL_STATE_FILE" "$installed_at" "$zip_path" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "version": 1,
+    "installed_at": sys.argv[2],
+    "zip_path": sys.argv[3],
+}
+path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+
+ghidra_re_bridge_clear_state_files
 
 printf 'Installed bridge extension to %s\n' "$installed_dir"
 if [[ -d "$app_installed_dir" ]]; then

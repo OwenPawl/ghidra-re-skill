@@ -62,6 +62,7 @@ GHIDRA_RE_BRIDGE_REQUESTS_DIR="${GHIDRA_RE_BRIDGE_REQUESTS_DIR:-$GHIDRA_RE_BRIDG
 GHIDRA_RE_BRIDGE_CURRENT_FILE="${GHIDRA_RE_BRIDGE_CURRENT_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.json}"
 GHIDRA_RE_BRIDGE_LEGACY_SESSION_FILE="${GHIDRA_RE_BRIDGE_LEGACY_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-session.json}"
 GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE="${GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-control.json}"
+GHIDRA_RE_BRIDGE_INSTALL_STATE_FILE="${GHIDRA_RE_BRIDGE_INSTALL_STATE_FILE:-$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-install-state.json}"
 GHIDRA_RE_BRIDGE_SESSION_FILE="${GHIDRA_RE_BRIDGE_SESSION_FILE:-$GHIDRA_RE_BRIDGE_CURRENT_FILE}"
 GHIDRA_RE_BRIDGE_CONTROL_FILE="${GHIDRA_RE_BRIDGE_CONTROL_FILE:-$GHIDRA_RE_BRIDGE_LEGACY_CONTROL_FILE}"
 GHIDRA_RE_SOURCE_REGISTRY_FILE="${GHIDRA_RE_SOURCE_REGISTRY_FILE:-$GHIDRA_RE_CONFIG_HOME/sources.json}"
@@ -859,6 +860,44 @@ else:
 PY
 }
 
+ghidra_re_bridge_install_timestamp() {
+  ghidra_re_bridge_read_value_from_file "$GHIDRA_RE_BRIDGE_INSTALL_STATE_FILE" installed_at 2>/dev/null || true
+}
+
+ghidra_re_bridge_session_is_post_install_file() {
+  local session_file="$1"
+  local install_ts=""
+  local session_ts=""
+  local python_cmd=""
+  [[ -f "$session_file" ]] || return 1
+  install_ts="$(ghidra_re_bridge_install_timestamp)"
+  [[ -n "$install_ts" ]] || return 0
+  session_ts="$(ghidra_re_bridge_read_value_from_file "$session_file" started_at || true)"
+  [[ -n "$session_ts" ]] || return 1
+  python_cmd="$(ghidra_re_python)" || return 1
+  "$python_cmd" - "$install_ts" "$session_ts" <<'PY'
+from datetime import datetime, timezone
+import sys
+
+def parse(value: str):
+    value = value.strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+install_dt = parse(sys.argv[1])
+session_dt = parse(sys.argv[2])
+if install_dt is None or session_dt is None:
+    raise SystemExit(1)
+raise SystemExit(0 if session_dt >= install_dt else 1)
+PY
+}
+
 ghidra_re_bridge_session_pid_alive_file() {
   local session_file="$1"
   local pid=""
@@ -875,6 +914,9 @@ ghidra_re_bridge_session_healthy_file() {
   local response=""
   [[ -f "$session_file" ]] || return 1
   if ! ghidra_re_bridge_session_pid_alive_file "$session_file"; then
+    return 1
+  fi
+  if ! ghidra_re_bridge_session_is_post_install_file "$session_file"; then
     return 1
   fi
   url="$(ghidra_re_bridge_read_value_from_file "$session_file" bridge_url)"

@@ -86,6 +86,26 @@ cmd+=(
 if ghidra_re_project_has_live_session "$project_name" "$program_name" || ghidra_re_project_has_lock_files "$project_name"; then
   session_json="$(ghidra_re_bridge_session_json "" "$project_name" "$program_name" 2>/dev/null || true)"
   if [[ -n "$session_json" ]]; then
+    save_message="$(
+      python3 - "$session_json" <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+repository = payload.get("result", {}).get("repository", {}) if isinstance(payload, dict) else {}
+if repository.get("changed") and repository.get("can_save"):
+    print("save")
+PY
+    )"
+    if [[ "$save_message" == "save" ]] && ghidra_re_flag_enabled "${GHIDRA_EXPORT_SAVE_LIVE:-1}"; then
+      if save_output="$("$SCRIPT_DIR/ghidra_bridge_save" "project=$project_name" "program=$program_name" "description=CodexBridge: save before export snapshot" 2>/dev/null)"; then
+        printf 'ghidra-re: saved dirty live session before snapshot export.\n' >&2
+        session_json="$(ghidra_re_bridge_session_json "" "$project_name" "$program_name" 2>/dev/null || true)"
+      else
+        printf 'ghidra-re: failed to save dirty live session before snapshot export; proceeding with on-disk state.\n' >&2
+      fi
+    fi
     warning_message="$(
       python3 - "$session_json" <<'PY'
 import json, sys

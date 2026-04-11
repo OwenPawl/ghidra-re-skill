@@ -32,6 +32,13 @@ while [[ $# -gt 0 ]]; do
     format=*)
       format="${1#format=}"
       ;;
+    json|markdown)
+      if [[ -z "$query" ]]; then
+        format="$1"
+      else
+        ghidra_re_die "unsupported argument: $1"
+      fi
+      ;;
     *)
       if [[ -z "$query" ]]; then
         query="$1"

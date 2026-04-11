@@ -79,6 +79,10 @@ python3 "$backend" init \
   --targets-json "$targets_json" \
   --seeds-json "$seeds_json" >/dev/null
 
+printf 'Mission: %s\n' "$mission_name"
+printf 'Mission dir: %s\n' "$mission_dir"
+printf 'Targets queued: %d\n' "${#targets[@]}"
+
 resolve_target_spec() {
   local spec="$1"
   local binary_path=""
@@ -193,12 +197,16 @@ PY
 }
 
 for target_spec in "${targets[@]}"; do
+  printf 'Resolving target: %s\n' "$target_spec"
   IFS='|' read -r binary_path project_name program_name <<<"$(resolve_target_spec "$target_spec")"
   [[ -n "$project_name" && -n "$program_name" ]] || ghidra_re_die "failed to resolve target: $target_spec"
+  printf 'Using project/program: %s / %s\n' "$project_name" "$program_name"
+  printf 'Ensuring export bundle for %s\n' "$program_name"
   ensure_export_bundle "$project_name" "$program_name"
   export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
   target_key="$(ghidra_re_target_key "$project_name" "$program_name")"
 
+  printf 'Opening live bridge for %s\n' "$target_key"
   "$SCRIPT_DIR/ghidra_bridge_open" "$project_name" "$program_name" >/dev/null
   session_file="$(ghidra_re_bridge_resolve_session_file "" "$project_name" "$program_name" || true)"
   [[ -n "$session_file" ]] || ghidra_re_die "failed to locate live session for $target_key"
@@ -231,6 +239,7 @@ done
 
 if [[ ${#seeds[@]} -gt 0 ]]; then
   for seed in "${seeds[@]}"; do
+    printf 'Tracing seed: %s\n' "$seed"
     "$SCRIPT_DIR/ghidra_mission_trace" "$mission_name" "seed=$seed" >/dev/null
   done
 fi

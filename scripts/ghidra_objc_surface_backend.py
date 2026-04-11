@@ -9,6 +9,18 @@ from collections import Counter, defaultdict
 
 OBJC_METHOD_RE = re.compile(r"^([+-])\[(.+?) ([^\]]+)\]$")
 OBJC_METHOD_BODY_RE = re.compile(r"^([+-])\[(.+)\]$")
+PROTOCOL_WRAPPER_PATTERNS = [
+    "_OBJC_PROTOCOL_$_",
+    "__OBJC_PROTOCOL_$_",
+    "__OBJC_LABEL_PROTOCOL_$_",
+    "__OBJC_PROTOCOL_REFERENCE_$_",
+    "__OBJC_$_PROTOCOL_INSTANCE_METHODS_",
+    "__OBJC_$_PROTOCOL_CLASS_METHODS_",
+    "__OBJC_$_PROTOCOL_REFS_",
+    "__OBJC_$_PROTOCOL_METHOD_TYPES_",
+    "$$protocol_requirements_base_descriptor_for_",
+    "protocol_requirements_base_descriptor_for_",
+]
 
 
 def load_json(path):
@@ -25,6 +37,47 @@ def unique_records(records, key_fn):
         seen.add(key)
         output.append(record)
     return output
+
+
+def short_swift_name(value):
+    if not value:
+        return ""
+    if "::" in value:
+        value = value.split("::")[-1]
+    if "." in value:
+        value = value.split(".")[-1]
+    return value
+
+
+def normalize_protocol_name(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    for prefix in PROTOCOL_WRAPPER_PATTERNS:
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+            break
+    if value.startswith("_objc_msgSend$") or value.startswith("_objc_msgLookup$"):
+        return ""
+    if value.startswith("associated type descriptor for "):
+        value = value[len("associated type descriptor for "):]
+    if value.startswith("protocol descriptor for "):
+        value = value[len("protocol descriptor for "):]
+    if value.startswith("$$method_descriptor_for_"):
+        return ""
+    if value.startswith("method_descriptor_for_"):
+        return ""
+    return short_swift_name(value)
+
+
+def protocol_name_matches(candidate, query):
+    normalized_candidate = normalize_protocol_name(candidate)
+    normalized_query = normalize_protocol_name(query) or short_swift_name(query)
+    if not normalized_candidate or not normalized_query:
+        return False
+    if normalized_candidate == normalized_query:
+        return True
+    return normalized_query in normalized_candidate or normalized_candidate in normalized_query
 
 
 def parse_objc_method_name(name, address="", source="symbol", known_classes=None):
@@ -99,15 +152,16 @@ def merged_methods(objc, symbols):
 
 def symbol_hits_for_name(symbols, query):
     return [
-        symbol for symbol in symbols.get("objc_related", [])
-        if query in symbol.get("name", "")
+        symbol for symbol in (symbols.get("objc_related", []) + symbols.get("symbols", []))
+        if query in symbol.get("name", "") or protocol_name_matches(symbol.get("name", ""), query)
     ]
 
 
 def recovered_protocol_hits(objc, protocol_name):
     return [
         record for record in objc.get("recovered_protocols", [])
-        if record.get("name") == protocol_name or record.get("raw_name") == protocol_name
+        if protocol_name_matches(record.get("name", ""), protocol_name)
+        or protocol_name_matches(record.get("raw_name", ""), protocol_name)
     ]
 
 
@@ -140,7 +194,7 @@ def protocol_ref_hits(objc, protocol_name):
     hits = []
     for entry in objc.get("protocol_refs", []):
         name = entry.get("name", "")
-        if protocol_name in name:
+        if protocol_name_matches(name, protocol_name):
             hits.append(entry)
     return hits
 
@@ -169,11 +223,16 @@ def selector_string_hits(objc, strings, selector):
 def swift_protocol_hits(swift, protocol_name):
     conformances = []
     for record in swift.get("associated_conformances", []):
-        if record.get("protocol_name") == protocol_name:
+        if protocol_name_matches(record.get("protocol_name", ""), protocol_name) or \
+           protocol_name_matches(record.get("type_name", ""), protocol_name):
             conformances.append(record)
     for record in swift.get("protocol_requirements", []):
-        if record.get("protocol_name") == protocol_name or record.get("type_name") == protocol_name:
+        if protocol_name_matches(record.get("protocol_name", ""), protocol_name) or \
+           protocol_name_matches(record.get("type_name", ""), protocol_name):
             conformances.append(record)
+    for record in swift.get("protocol_conformances", []):
+        if protocol_name_matches(str(record), protocol_name):
+            conformances.append({"kind": "protocol_conformance", "value": record})
     return conformances
 
 
@@ -182,6 +241,7 @@ def class_payload(objc, symbols, strings, swift, class_name):
     class_methods = methods_for_class(methods, class_name)
     symbol_hits = symbol_hits_for_name(symbols, class_name)
     swift_bridge_types = set()
+    swift_bridge_protocols = set()
     alias_map = swift.get("alias_map", {})
     if isinstance(alias_map, dict):
         for alias, canonical in alias_map.items():
@@ -198,6 +258,12 @@ def class_payload(objc, symbols, strings, swift, class_name):
         for alias in aliases:
             if class_name in str(alias):
                 swift_bridge_types.add(str(alias))
+    for record in swift.get("protocol_conformances", []):
+        record_text = str(record)
+        if class_name in record_text or f"__C.{class_name}" in record_text:
+            normalized = normalize_protocol_name(record_text)
+            if normalized:
+                swift_bridge_protocols.add(normalized)
     return {
         "class_name": class_name,
         "declared": class_name in (objc.get("interface_classes", []) or []) or class_name in objc.get("classes", []),
@@ -216,6 +282,7 @@ def class_payload(objc, symbols, strings, swift, class_name):
             if class_name in hit
         ],
         "swift_bridge_types": sorted(swift_bridge_types)[:20],
+        "swift_bridge_protocols": sorted(swift_bridge_protocols)[:20],
     }
 
 
@@ -237,18 +304,37 @@ def selector_payload(objc, symbols, strings, selector, live_trace=None):
 
 
 def protocol_payload(objc, symbols, swift, protocol_name):
-    explicit = protocol_name in objc.get("protocols", [])
+    normalized_name = normalize_protocol_name(protocol_name) or protocol_name
+    explicit = any(protocol_name_matches(name, normalized_name) for name in objc.get("protocols", []))
     recovered = recovered_protocol_hits(objc, protocol_name)
     symbol_hits = symbol_hits_for_name(symbols, protocol_name)
     swift_hits = swift_protocol_hits(swift, protocol_name)
+    protocol_refs = protocol_ref_hits(objc, protocol_name)
+    method_descriptor_hits = [
+        hit for hit in protocol_refs
+        if "INSTANCE_METHODS" in hit.get("name", "") or "CLASS_METHODS" in hit.get("name", "")
+    ]
+    swift_conforming_types = sorted({
+        short_swift_name(hit.get("conforming_type", ""))
+        for hit in swift_hits
+        if isinstance(hit, dict) and hit.get("conforming_type")
+    })
+    swift_related_types = sorted({
+        short_swift_name(hit.get("type_name", ""))
+        for hit in swift_hits
+        if isinstance(hit, dict) and hit.get("type_name")
+    })
     return {
-        "protocol_name": protocol_name,
+        "protocol_name": normalized_name,
         "explicit_declared": explicit,
         "recovered_declared": bool(recovered),
         "recovered_hits": recovered,
-        "protocol_ref_hits": protocol_ref_hits(objc, protocol_name),
+        "protocol_ref_hits": protocol_refs,
         "symbol_hits": symbol_hits,
         "swift_hits": swift_hits,
+        "method_descriptor_hits": method_descriptor_hits,
+        "swift_conforming_types": swift_conforming_types,
+        "swift_related_types": swift_related_types,
     }
 
 
@@ -360,20 +446,21 @@ def surface_payload(objc, symbols, strings):
         if selector:
             selector_counter[selector] += 1
     def keep_protocol(name):
-        if not name:
+        normalized = normalize_protocol_name(name)
+        if not normalized:
             return False
-        if name.startswith("$$") or name.startswith("_OBJC_") or name.startswith("__OBJC_"):
+        if normalized.startswith("$$") or normalized.startswith("_OBJC_") or normalized.startswith("__OBJC_"):
             return False
-        if "::" in name or "PROTOCOL_" in name:
+        if "::" in normalized or "PROTOCOL_" in normalized:
             return False
         return True
 
     protocol_names = set(
-        name for name in objc.get("protocols", [])
+        normalize_protocol_name(name) for name in objc.get("protocols", [])
         if keep_protocol(name)
     )
     protocol_names.update(
-        record.get("name", "") for record in objc.get("recovered_protocols", [])
+        normalize_protocol_name(record.get("name", "")) for record in objc.get("recovered_protocols", [])
         if keep_protocol(record.get("name", ""))
     )
     protocol_names.discard("")
