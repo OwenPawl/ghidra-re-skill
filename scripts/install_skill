@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# install_skill
+#
+# Host-agnostic installer for the ghidra-re skill.
+#
+# Copies the repository checkout (or share-package staging copy) into one
+# or more "skill host" directories that follow the standard layout:
+#
+#   ~/.codex/skills/ghidra-re/          (OpenAI Codex)
+#   ~/.claude/skills/ghidra-re/         (Anthropic Claude Code)
+#
+# Both hosts read the same SKILL.md and the same scripts/ directory, so a
+# single install_skill invocation can target one or both hosts.
+#
+# Usage:
+#   scripts/install_skill [--host HOST] [--source DIR] [--no-bootstrap]
+#                         [--skip-smoke-test] [--skip-bridge-install]
+#
+# Options:
+#   --host HOST          codex | claude | both | auto  (default: auto)
+#                        "auto" detects installed hosts; falls back to codex.
+#                        "both" installs into every known host unconditionally.
+#                        Accepts comma-separated lists: "codex,claude".
+#
+#   --source DIR         Directory to copy from. Default: the repo root that
+#                        contains this script. Share-package installers can
+#                        override this to point at the unpacked staging copy.
+#
+#   --no-bootstrap       Don't run <target>/scripts/bootstrap after install.
+#   --skip-smoke-test    Forward --skip-smoke-test to bootstrap.
+#   --skip-bridge-install  Forward --skip-bridge-install to bootstrap.
+#
+# Exit codes:
+#   0  all targets installed (and optionally bootstrapped) cleanly
+#   1  install copy failed
+#   2  bad arguments
+#   3  bootstrap failed on at least one target
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/skill_host.sh
+source "$SCRIPT_DIR/lib/skill_host.sh"
+
+HOST_CHOICE="auto"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+RUN_BOOTSTRAP=1
+BOOTSTRAP_ARGS=()
+
+usage() {
+  sed -n '3,40p' "$0"
+}
+
+die() {
+  printf 'install_skill: %s\n' "$*" >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      [[ $# -ge 2 ]] || die "missing value for --host"
+      HOST_CHOICE="$2"
+      shift 2
+      ;;
+    --host=*)
+      HOST_CHOICE="${1#--host=}"
+      shift
+      ;;
+    --source)
+      [[ $# -ge 2 ]] || die "missing value for --source"
+      SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --source=*)
+      SOURCE_DIR="${1#--source=}"
+      shift
+      ;;
+    --no-bootstrap)
+      RUN_BOOTSTRAP=0
+      shift
+      ;;
+    --skip-smoke-test|--skip-bridge-install)
+      BOOTSTRAP_ARGS+=("$1")
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -d "$SOURCE_DIR" ]] || die "source directory not found: $SOURCE_DIR"
+[[ -f "$SOURCE_DIR/SKILL.md" ]] || die "source directory missing SKILL.md: $SOURCE_DIR"
+
+mapfile -t TARGETS < <(ghidra_re_host_resolve_install_targets "$HOST_CHOICE") || die "invalid --host: $HOST_CHOICE"
+
+if [[ ${#TARGETS[@]} -eq 0 ]]; then
+  die "no install targets resolved from --host=$HOST_CHOICE"
+fi
+
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+bootstrap_failures=0
+
+copy_tree() {
+  local src="$1"
+  local dst="$2"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a \
+      --delete \
+      --exclude '.git' \
+      --exclude '.git/' \
+      --exclude '.DS_Store' \
+      --exclude '__MACOSX' \
+      --exclude '.gradle/' \
+      --exclude 'build/' \
+      "$src/" "$dst/"
+  else
+    cp -R "$src/." "$dst/"
+  fi
+}
+
+for target in "${TARGETS[@]}"; do
+  [[ -z "$target" ]] && continue
+  target_parent="$(dirname "$target")"
+  mkdir -p "$target_parent"
+
+  if [[ -e "$target" ]]; then
+    backup="${target}.backup-${TIMESTAMP}"
+    mv "$target" "$backup"
+    printf 'install_skill: backed up existing skill to %s\n' "$backup"
+  fi
+
+  mkdir -p "$target"
+  if ! copy_tree "$SOURCE_DIR" "$target"; then
+    printf 'install_skill: copy failed for %s\n' "$target" >&2
+    exit 1
+  fi
+
+  if [[ -d "$target/scripts" ]]; then
+    chmod +x "$target"/scripts/* 2>/dev/null || true
+  fi
+
+  printf 'install_skill: installed %s\n' "$target"
+
+  if [[ "$RUN_BOOTSTRAP" -eq 1 && -x "$target/scripts/bootstrap" ]]; then
+    if ! "$target/scripts/bootstrap" "${BOOTSTRAP_ARGS[@]}"; then
+      printf 'install_skill: bootstrap failed for %s (run %s/scripts/doctor)\n' \
+        "$target" "$target" >&2
+      bootstrap_failures=$((bootstrap_failures + 1))
+    fi
+  fi
+done
+
+if [[ "$bootstrap_failures" -gt 0 ]]; then
+  exit 3
+fi

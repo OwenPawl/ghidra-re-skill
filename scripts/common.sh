@@ -921,6 +921,15 @@ print(json.dumps(payload))
 PY
 }
 
+ghidra_re_bridge_session_json() {
+  local requested_session="${1:-}"
+  local requested_project="${2:-}"
+  local requested_program="${3:-}"
+  local session_file=""
+  session_file="$(ghidra_re_bridge_resolve_session_file "$requested_session" "$requested_project" "$requested_program")" || return 1
+  ghidra_re_bridge_request_file "$session_file" /session '{}'
+}
+
 ghidra_re_bridge_remove_current_if_matches() {
   local session_file="$1"
   local current_file=""
@@ -1006,7 +1015,7 @@ ghidra_re_bridge_write_current_from_session_file() {
   session_id="$(ghidra_re_bridge_read_value_from_file "$session_file" session_id)"
   [[ -n "$session_id" ]] || ghidra_re_die "session file is missing session_id: $session_file"
   lock_dir="$(ghidra_re_bridge_acquire_current_lock)"
-  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.XXXXXX.tmp")"
+  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_CONFIG_DIR/bridge-current.XXXXXX")"
   "$(ghidra_re_python)" - "$session_id" "$session_file" >"$tmp_file" <<'PY'
 import json, sys
 from datetime import datetime, timezone
@@ -1306,7 +1315,7 @@ ghidra_re_bridge_write_request_file() {
   if [[ -z "$request_id" ]]; then
     request_id="request-$(date +%s)-$RANDOM"
   fi
-  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_REQUESTS_DIR/request.XXXXXX.tmp")"
+  tmp_file="$(mktemp "$GHIDRA_RE_BRIDGE_REQUESTS_DIR/request.XXXXXX")"
   request_file="$GHIDRA_RE_BRIDGE_REQUESTS_DIR/${request_id}.json"
   "$(ghidra_re_python)" - "$request_id" "$command" "$requested_session" "$project_name" "$program_name" >"$tmp_file" <<'PY'
 import json, sys

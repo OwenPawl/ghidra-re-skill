@@ -10,7 +10,8 @@ usage() {
 Usage: build_mac_desktop_share_package [output_zip] [--without-ghidra-payload]
 
 Builds a macOS-friendly share archive that can install:
-  - the ghidra-re skill into ~/.codex/skills/ghidra-re
+  - the ghidra-re skill into every detected skill host
+    (~/.codex/skills/ghidra-re and/or ~/.claude/skills/ghidra-re)
   - Ghidra into /Applications/Ghidra using an embedded payload when available
   - the lightweight /Applications/Ghidra.app launcher
 
@@ -105,8 +106,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_SKILL_DIR="$SCRIPT_DIR/ghidra-re"
 PACKAGE_PAYLOAD_DIR="$SCRIPT_DIR/payload"
 PACKAGE_INFO="$SCRIPT_DIR/package-info.json"
-INSTALL_BASE="${CODEX_HOME:-$HOME/.codex}/skills"
-TARGET_DIR="$INSTALL_BASE/ghidra-re"
+# Dual-host install: the packaged skill ships scripts/install_skill, which
+# resolves Codex / Claude Code install locations from the unified host
+# layer at scripts/lib/skill_host.sh. Override the host via the
+# GHIDRA_RE_HOST env var (codex|claude|both|auto, default auto) when
+# driving this installer from CI.
+GHIDRA_RE_HOST="${GHIDRA_RE_HOST:-auto}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ghidra-re"
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 GHIDRA_TARGET="/Applications/Ghidra"
@@ -281,17 +286,20 @@ ensure_ghidra() {
 }
 
 install_skill() {
-  mkdir -p "$INSTALL_BASE"
-  if [[ -e "$TARGET_DIR" ]]; then
-    mv "$TARGET_DIR" "${TARGET_DIR}.backup-${TIMESTAMP}"
-    say "Backed up existing skill to ${TARGET_DIR}.backup-${TIMESTAMP}"
+  chmod +x "$PACKAGE_SKILL_DIR"/scripts/install_skill \
+    "$PACKAGE_SKILL_DIR"/scripts/bootstrap 2>/dev/null || true
+  if [[ ! -x "$PACKAGE_SKILL_DIR/scripts/install_skill" ]]; then
+    say "Skill payload is missing scripts/install_skill."
+    exit 1
   fi
-  cp -R "$PACKAGE_SKILL_DIR" "$TARGET_DIR"
-  chmod +x "$TARGET_DIR"/scripts/*
+  # install_skill handles copy + backup + bootstrap for every resolved host.
+  "$PACKAGE_SKILL_DIR/scripts/install_skill" \
+    --source "$PACKAGE_SKILL_DIR" \
+    --host "$GHIDRA_RE_HOST"
 }
 
 main() {
-  say "Installing ghidra-re for macOS"
+  say "Installing ghidra-re for macOS (host=$GHIDRA_RE_HOST)"
   [[ -d "$PACKAGE_SKILL_DIR" ]] || {
     say "Skill payload is missing."
     exit 1
@@ -299,19 +307,15 @@ main() {
 
   ensure_ghidra
   ensure_java
-  install_skill
-
-  if "$TARGET_DIR/scripts/bootstrap"; then
+  if install_skill; then
     say
     say "Install complete."
-    say "Skill: $TARGET_DIR"
     say "Config: $CONFIG_DIR/config.env"
     say "Workspace: $HOME/ghidra-projects"
     say "Launch Ghidra from /Applications/Ghidra.app or /Applications/Ghidra/ghidraRun"
   else
     say
-    say "The skill was copied to $TARGET_DIR, but bootstrap failed."
-    say "Run $TARGET_DIR/scripts/doctor for a full report."
+    say "Skill install failed. Re-run with GHIDRA_RE_HOST=codex or GHIDRA_RE_HOST=claude to force a host."
     exit 1
   fi
 }
@@ -329,8 +333,15 @@ Fast path:
    - install Ghidra into /Applications/Ghidra when needed
    - install the Ghidra launcher app into /Applications/Ghidra.app when available
    - install Java 21 with Homebrew when needed
-   - copy ghidra-re into ~/.codex/skills/ghidra-re
+   - copy ghidra-re into every detected skill host
+     (~/.codex/skills/ghidra-re for OpenAI Codex and/or
+      ~/.claude/skills/ghidra-re for Anthropic Claude Code)
    - run scripts/bootstrap so the bridge and workspace are ready
+
+To force a single host, set GHIDRA_RE_HOST before launching the installer:
+  GHIDRA_RE_HOST=codex  ./Install\ Ghidra\ RE.command
+  GHIDRA_RE_HOST=claude ./Install\ Ghidra\ RE.command
+  GHIDRA_RE_HOST=both   ./Install\ Ghidra\ RE.command
 
 Notes:
 - If /Applications/Ghidra already exists and is usable, the installer reuses it.
@@ -338,8 +349,10 @@ Notes:
 - The bridge session and control files live under ~/.config/ghidra-re/
 - If Ghidra was already running before install, restart it once so the bridge plugin loads cleanly.
 
-After install, Codex can use:
+After install, both Codex and Claude Code load the same SKILL.md from
+whichever skill-host directories were populated:
   ~/.codex/skills/ghidra-re/SKILL.md
+  ~/.claude/skills/ghidra-re/SKILL.md
 
 And you can launch Ghidra from:
   /Applications/Ghidra.app

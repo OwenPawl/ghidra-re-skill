@@ -76,7 +76,10 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
    - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
 10. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-11. For Swift-heavy Apple targets, generate a surface-level report before you start chasing individual mangled symbols:
+11. For Swift-heavy Apple targets, resolve `_OUTLINED_FUNCTION_*` stubs **before** exporting or decompiling — this is essential for any dyld-extracted binary (WorkflowKit, BackgroundTaskAgent, etc.) where the Swift compiler outlined ARC/copy/move helpers:
+   - `"$SKILL_ROOT/scripts/ghidra_resolve_swift_outlined" <project_name> <program_name> [dry_run=true] [inline=false]`
+   - Re-export the Apple bundle afterwards to get updated function names in the inventory.
+12. Generate a surface-level report before chasing individual mangled symbols:
    - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
    - `scripts/ghidra_describe_swift_type <project_name> <program_name> <TypeName>`
 12. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
@@ -150,7 +153,12 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - `scripts/ghidra_mission_finish` can also forward a discovered workflow-friction note into the shared GitHub-backed notes backlog with `shared_note_title=...` and `shared_note_body=...`.
 - Finished missions now also emit `reports/casefile.md` and `reports/casefile.json` as a cleaner analyst closeout bundle.
 
-### 3) Use the Apple export bundle first
+### 3) Resolve Swift outlined functions (Swift-heavy binaries only)
+- For any dyld-extracted or Swift-heavy binary, run `scripts/ghidra_resolve_swift_outlined` **before** exporting or decompiling. This renames 3,000–4,000 anonymous `_OUTLINED_FUNCTION_*` stubs to descriptive names (`outlined$argshuffle$`, `outlined$pactail$swift_retain$`, `outlined$loadglobal$`, etc.) and marks pure ARC helpers as inline. Without this, the decompiler output for any Swift method that calls retain/release is dominated by opaque `_OUTLINED_FUNCTION_0()` calls that hide the real control flow.
+- Re-run `scripts/ghidra_export_apple_bundle` afterwards to regenerate the function inventory with updated names.
+- The script classifies outlined stubs into: `argshuffle`, `pactail` (PAC-guarded tail call — resolved to callee name), `loadglobal`, `loadmov`, `compare`, `pacsign`, `authstub` (unresolved import stubs), and `misc`.
+
+### 4) Use the Apple export bundle
 - Run `scripts/ghidra_export_apple_bundle` after import unless the user only wants a narrow script run.
 - The bundle runs `DemangleAllScript.java` and then exports:
   - `program_summary.json`
@@ -168,7 +176,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - Set `GHIDRA_EXPORT_DEMANGLE=0` when you want a faster or quieter export pass without the blanket demangle step.
 - For Swift-heavy frameworks, prefer `scripts/ghidra_swift_surface_report` before ad hoc `functions/search` calls so you start from grouped types/methods instead of raw mangled names.
 
-### 4) Use targeted scripts for follow-up
+### 5) Use targeted scripts for follow-up
 - Run `scripts/ghidra_export_bug_hunt_bundle` when the task is bug hunting, boundary analysis, or userland trust-boundary triage.
 - Use `scripts/ghidra_function_dossier` on the top-ranked candidate paths before decompiling functions ad hoc.
 - For ObjC-heavy frameworks, start with `scripts/ghidra_objc_surface_report`, then drill into `scripts/ghidra_describe_objc_class`, `scripts/ghidra_describe_objc_protocol`, `scripts/ghidra_describe_selector`, `scripts/ghidra_trace_classref`, and `scripts/ghidra_objc_message_flow` when you need a more useful selector-level flow view.
@@ -178,7 +186,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - `ExportXrefs.java` for targeted xref tracing
 - `ExportAppleBundle.java` when you want the full structured export outside the convenience wrapper
 
-### 5) Use the live bridge for iterative GUI sessions
+### 6) Use the live bridge for iterative GUI sessions
 - Prefer the live bridge whenever the target is already open or the task will involve repeated `search -> navigate -> decompile -> refs` loops.
 - Prefer headless exports for wide scans, batch bundles, or cold-start project setup; switch to the bridge once you want a tighter interactive loop.
 - `scripts/bootstrap` installs the bridge extension into the user's Ghidra settings when possible.
@@ -207,6 +215,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_import_macos_framework </System/.../Framework.framework[/Framework]> [project_name] [copy=cache|direct] [source=<name>]`
 - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
 - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
+- `scripts/ghidra_resolve_swift_outlined <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=false] [verbose=true]`
 - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
 - `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
 - `scripts/ghidra_objc_surface_report <project_name> <program_name> [format=json|markdown]`

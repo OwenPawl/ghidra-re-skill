@@ -84,6 +84,24 @@ cmd+=(
 )
 
 if ghidra_re_project_has_live_session "$project_name" "$program_name" || ghidra_re_project_has_lock_files "$project_name"; then
+  session_json="$(ghidra_re_bridge_session_json "" "$project_name" "$program_name" 2>/dev/null || true)"
+  if [[ -n "$session_json" ]]; then
+    warning_message="$(
+      python3 - "$session_json" <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+repository = payload.get("result", {}).get("repository", {}) if isinstance(payload, dict) else {}
+if repository.get("changed"):
+    print("ghidra-re: live GUI session has unsaved changes; snapshot export will use the on-disk project state and may miss recent bridge mutations.")
+PY
+    )"
+    if [[ -n "$warning_message" ]]; then
+      printf '%s\n' "$warning_message" >&2
+    fi
+  fi
   IFS='|' read -r snapshot_root working_project_name _ <<<"$(ghidra_re_create_readonly_project_snapshot "$project_name" "export-$program_name")"
   working_project_root="$snapshot_root/$working_project_name"
   cmd[1]="$working_project_root"

@@ -28,32 +28,32 @@ rsync -a \
 
 cat >"$package_root/install-ghidra-re.sh" <<'EOF'
 #!/usr/bin/env bash
+#
+# ghidra-re share-package installer.
+#
+# Delegates to the host-agnostic scripts/install_skill inside the packaged
+# skill so that the same script surface that powers a git checkout also
+# powers share-package installs.
+#
+# Usage:
+#   ./install-ghidra-re.sh                       # auto-detect host(s)
+#   ./install-ghidra-re.sh --host codex          # force Codex only
+#   ./install-ghidra-re.sh --host claude         # force Claude Code only
+#   ./install-ghidra-re.sh --host both           # install into every host
+#   ./install-ghidra-re.sh --skip-smoke-test     # forwarded to bootstrap
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_SKILL_DIR="$SCRIPT_DIR/ghidra-re"
-INSTALL_BASE="${CODEX_HOME:-$HOME/.codex}/skills"
-TARGET_DIR="$INSTALL_BASE/ghidra-re"
-TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 
-mkdir -p "$INSTALL_BASE"
-
-if [[ -e "$TARGET_DIR" ]]; then
-  BACKUP_DIR="${TARGET_DIR}.backup-${TIMESTAMP}"
-  mv "$TARGET_DIR" "$BACKUP_DIR"
-  printf 'Backed up existing skill to %s\n' "$BACKUP_DIR"
-fi
-
-cp -R "$PACKAGE_SKILL_DIR" "$TARGET_DIR"
-chmod +x "$TARGET_DIR"/scripts/*
-
-if "$TARGET_DIR/scripts/bootstrap"; then
-  printf 'Installed ghidra-re to %s\n' "$TARGET_DIR"
-else
-  printf 'ghidra-re installed to %s but bootstrap failed; run %s/scripts/doctor\n' "$TARGET_DIR" "$TARGET_DIR" >&2
+if [[ ! -x "$PACKAGE_SKILL_DIR/scripts/install_skill" ]]; then
+  printf 'install-ghidra-re: %s/scripts/install_skill is missing or not executable\n' \
+    "$PACKAGE_SKILL_DIR" >&2
   exit 1
 fi
+
+exec "$PACKAGE_SKILL_DIR/scripts/install_skill" --source "$PACKAGE_SKILL_DIR" "$@"
 EOF
 
 cat >"$package_root/README.txt" <<'EOF'
@@ -61,10 +61,17 @@ ghidra-re share package
 
 1. Unzip this archive.
 2. Run ./install-ghidra-re.sh
-3. The installer copies the skill into ~/.codex/skills/ghidra-re and runs scripts/bootstrap
+3. The installer copies the skill into every detected skill host
+   (~/.codex/skills/ghidra-re for Codex, ~/.claude/skills/ghidra-re
+   for Claude Code) and runs scripts/bootstrap for each target.
+
+To force a single host:
+  ./install-ghidra-re.sh --host codex
+  ./install-ghidra-re.sh --host claude
+  ./install-ghidra-re.sh --host both
 
 If bootstrap cannot auto-detect Ghidra or Java 21, run:
-  ~/.codex/skills/ghidra-re/scripts/doctor
+  <install-target>/scripts/doctor
 
 The generated machine-local config lives at:
   ~/.config/ghidra-re/config.env

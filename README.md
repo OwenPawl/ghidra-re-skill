@@ -1,6 +1,8 @@
 # ghidra-re
 
-`ghidra-re` is a local Codex skill for Ghidra-based reverse engineering on macOS and Windows, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
+`ghidra-re` is a local skill for Ghidra-based reverse engineering on macOS and Windows, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
+
+It is **dual-host**: the same checkout installs as either an **OpenAI Codex** skill (`~/.codex/skills/ghidra-re`) or an **Anthropic Claude Code** skill (`~/.claude/skills/ghidra-re`), or both at the same time. A single unified backend in `scripts/` and `powershell/` is reused across hosts — there is no host-specific fork of any script. See [`scripts/lib/skill_host.sh`](./scripts/lib/skill_host.sh) for the unified host-resolution layer.
 
 ## What it includes
 
@@ -18,12 +20,13 @@
 
 ## Layout
 
-- [SKILL.md](./SKILL.md): skill entrypoint and workflow instructions
-- [scripts](./scripts): shell wrappers and builders
-- [powershell](./powershell): native PowerShell module for Windows-first usage
+- [SKILL.md](./SKILL.md): skill entrypoint and workflow instructions, loaded by both Codex and Claude Code
+- [scripts](./scripts): shell wrappers, builders, and the host-agnostic `install_skill`
+- [scripts/lib/skill_host.sh](./scripts/lib/skill_host.sh): unified "which skill host am I running under" resolution layer
+- [powershell](./powershell): native PowerShell module for Windows-first usage (probes both `CODEX_HOME` and `CLAUDE_HOME`)
 - [bridge-extension](./bridge-extension): Ghidra bridge source and prebuilt extension zips
 - [references](./references): notes, schemas, and heuristics
-- [agents/openai.yaml](./agents/openai.yaml): skill metadata for Codex discovery
+- [agents/openai.yaml](./agents/openai.yaml): optional Codex discovery metadata; Claude Code reads `SKILL.md` frontmatter directly
 
 ## Shared notes
 
@@ -47,13 +50,30 @@ The old [use-case-driven-notes.md](./references/use-case-driven-notes.md) file i
 
 ## Quick install
 
-If you already use Codex locally:
+The recommended install path for either host is the host-agnostic installer in the repo. It copies the checkout into the right place, runs `bootstrap`, and installs the Ghidra live-bridge extension. Run it from a fresh `git clone`:
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R ghidra-re ~/.codex/skills/ghidra-re
-~/.codex/skills/ghidra-re/scripts/bootstrap
+./scripts/install_skill                 # auto-detect host(s): Codex, Claude Code, or both
+./scripts/install_skill --host codex    # force Codex only
+./scripts/install_skill --host claude   # force Claude Code only
+./scripts/install_skill --host both     # install into every known host
 ```
+
+Or, if you prefer the fully manual path:
+
+```bash
+# Codex
+mkdir -p ~/.codex/skills
+cp -R . ~/.codex/skills/ghidra-re
+~/.codex/skills/ghidra-re/scripts/bootstrap
+
+# Claude Code
+mkdir -p ~/.claude/skills
+cp -R . ~/.claude/skills/ghidra-re
+~/.claude/skills/ghidra-re/scripts/bootstrap
+```
+
+Both hosts load the same `SKILL.md` (YAML frontmatter with `name` + `description`) and the same `scripts/` surface; nothing in the skill needs to know which host launched it.
 
 If you want a one-file Mac installer bundle:
 
@@ -100,7 +120,7 @@ You can override both:
 - macOS or Windows
 - Ghidra 12.0.4
 - Java 21
-- Codex with local skill support
+- A supported skill host (any of: OpenAI Codex with local skill support, Anthropic Claude Code with local skill support)
 
 On Windows, you can now use either Git Bash or the native `GhidraRe` PowerShell module.
 
