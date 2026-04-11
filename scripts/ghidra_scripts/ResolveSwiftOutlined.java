@@ -74,15 +74,29 @@ public class ResolveSwiftOutlined extends GhidraScript {
 	// the pattern does not match.  They are tried in order; first match wins.
 	// -------------------------------------------------------------------------
 
-	/** Category B: 4-instruction PAC auth stub (adrp / add / ldr / braa). */
+	/**
+	 * Category B: GOT auth stub — a small function that loads a function pointer from a
+	 * page-relative address (GOT slot) and branches to it, possibly with PAC authentication.
+	 *
+	 * The canonical dyld form is 4 instructions (adrp / add / ldr / braa), but dyld-extracted
+	 * binaries produce several variants:
+	 *   adrp / ldr / braa              — no add, PAC branch
+	 *   adrp / ldr / blr               — no add, unguarded call (non-PAC)
+	 *   adrp / ldr / nop / blr         — same with padding
+	 *   nop / adrp / ldr / braa        — leading nop
+	 *   adrp / ldr / ldr / braa        — double load (double-pointer indirection)
+	 *
+	 * Accept any sequence of 1–6 instructions that terminates with a branch via register:
+	 *   bra* (PAC indirect branch), blr (indirect call), or br (indirect branch without PAC).
+	 * The callee is resolved by resolveAuthStubDescriptor() which reads the LDR reference.
+	 */
 	private static String classifyAuthStub(List<String> mnems) {
-		if (mnems.size() == 4
-				&& mnems.get(0).equals("adrp")
-				&& mnems.get(1).equals("add")
-				&& mnems.get(2).equals("ldr")
-				&& (mnems.get(3).startsWith("bra"))) {
-			return "authstub";
-		}
+		if (mnems.isEmpty() || mnems.size() > 6) return null;
+		String last = mnems.get(mnems.size() - 1);
+		// PAC-authenticated branches: braa, braaz, brab, brabz, blraa, blraaz, blrab, blrabz
+		if (last.startsWith("bra") || last.startsWith("blra")) return "authstub";
+		// Unguarded indirect branch/call via register: br xN, blr xN
+		if (last.equals("br") || last.equals("blr")) return "authstub";
 		return null;
 	}
 
@@ -163,18 +177,21 @@ public class ResolveSwiftOutlined extends GhidraScript {
 	}
 
 	/**
-	 * Small (≤ 5 insns) helper that ends in ret and mixes loads/stores/arithmetic.
+	 * Small (≤ 8 insns) helper that ends in ret or b and mixes loads/stores/arithmetic.
 	 * Too specific to match a known ARC template but clearly a shared computation
 	 * helper extracted by the compiler. Rename as "helper$Nb" for readability.
+	 * The limit is 8 (32 bytes) to cover simple outlined thunks that the compiler
+	 * extracted but that aren't PAC-authenticated authstubs.
 	 */
 	private static String classifySmallHelper(List<String> mnems, int bodySize) {
 		if (mnems.isEmpty()) return null;
-		if (mnems.size() > 5) return null;
+		if (mnems.size() > 8) return null;
 		String last = mnems.get(mnems.size() - 1);
 		// Accept ret or unconditional b (tail call without PAC guard)
 		if (!last.startsWith("ret") && !last.equals("b")) return null;
-		// Must not be a PAC stub (those have braa)
-		if (mnems.stream().anyMatch(m -> m.startsWith("bra"))) return null;
+		// Must not be a PAC stub (those have braa/blra/br/blr)
+		if (mnems.stream().anyMatch(m -> m.startsWith("bra") || m.startsWith("blra"))) return null;
+		if (mnems.stream().anyMatch(m -> m.equals("br") || m.equals("blr"))) return null;
 		return "helper$" + bodySize + "b";
 	}
 
@@ -257,13 +274,24 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			// outlined-function detector (common in dyld-extracted __stubs regions).
 			// We will classify them below and skip any that don't match the authstub pattern.
 			boolean isFunCandidate = scanFunStubs && name.startsWith("FUN_");
-			if (!unresolvedOutlined && !existingAuthStub && !isFunCandidate) continue;
+			// Re-examine existing misc stubs: the classifier set has grown, so stubs that
+			// previously fell to the misc fallback may now match a more specific category.
+			// We skip very large misc bodies (>32 bytes) that are genuinely complex functions.
+			boolean isExistingMisc = name.startsWith("outlined$misc$");
+			if (!unresolvedOutlined && !existingAuthStub && !isFunCandidate && !isExistingMisc) continue;
 			total++;
 
 			// Read instructions
 			AddressSetView body = fn.getBody();
 			long bodySize = body.getNumAddresses();
 			List<String> mnems = getMnems(fn, listing);
+
+			// For very large existing misc functions, skip — they are genuinely complex
+			// and the classifiers below are designed for small outlined helpers.
+			if (isExistingMisc && bodySize > 32) {
+				total--;
+				continue;
+			}
 
 			// Classify
 			String category = null;
@@ -276,6 +304,9 @@ public class ResolveSwiftOutlined extends GhidraScript {
 				total--;
 				continue;
 			}
+			// For re-examined misc stubs: allow the full classifier chain to run.
+			// If nothing better matches they will fall to classifyFallback and keep
+			// their current misc$Xb name (bridge sync will mark them as unchanged).
 
 			if (isStub && skipStubs) {
 				skipped++;
