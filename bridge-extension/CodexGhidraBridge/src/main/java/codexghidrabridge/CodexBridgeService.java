@@ -1251,6 +1251,22 @@ class CodexBridgeService {
 				function.setCallingConvention(callingConvention);
 			}
 
+			if (hasAny(body, "inline", "is_inline")) {
+				boolean inline = optBoolean(body, "inline",
+					optBoolean(body, "is_inline", function.isInline()));
+				function.setInline(inline);
+			}
+
+			if (hasAny(body, "no_return")) {
+				function.setNoReturn(optBoolean(body, "no_return", function.hasNoReturn()));
+			}
+
+			if (hasAny(body, "has_var_args", "var_args")) {
+				boolean hasVarArgs = optBoolean(body, "has_var_args",
+					optBoolean(body, "var_args", function.hasVarArgs()));
+				function.setVarArgs(hasVarArgs);
+			}
+
 			JsonArray params = optArray(body, "params", "parameters");
 			if (params != null) {
 				List<Variable> replacement = new ArrayList<>();
@@ -1714,6 +1730,9 @@ class CodexBridgeService {
 		object.addProperty("repeatable_comment", empty(function.getRepeatableComment()));
 		object.addProperty("thunk", function.isThunk());
 		object.addProperty("external", function.isExternal());
+		object.addProperty("is_inline", function.isInline());
+		object.addProperty("has_var_args", function.hasVarArgs());
+		object.addProperty("no_return", function.hasNoReturn());
 		object.add("body", addressSetToJson(function.getBody(), 32));
 		if (includeVariables) {
 			JsonArray parameters = new JsonArray();

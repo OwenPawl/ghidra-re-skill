@@ -24,7 +24,7 @@
 # Key=value options:
 #   dry_run=true       Classify and report without writing renames.
 #   inline=false       Skip marking helpers as inline (default: true).
-#   skip_stubs=false   Also process unresolved import auth stubs (default: true = skip).
+#   skip_stubs=true    Skip unresolved import auth stubs (default: false = rename).
 #   verbose=true       Print each rename to the log.
 #
 # Output:
@@ -199,11 +199,12 @@ for index, rec in enumerate(renames, 1):
         {
             "write": True,
             "address": rec["entry"],
-            "name": rec["new_name"],
+            "rename": rec["new_name"],
+            "inline": bool(rec.get("marked_inline", False)),
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        f"{bridge_url}/edit/rename",
+        f"{bridge_url}/edit/function-signature",
         data=body,
         headers={
             "Authorization": f"Bearer {bridge_token}",

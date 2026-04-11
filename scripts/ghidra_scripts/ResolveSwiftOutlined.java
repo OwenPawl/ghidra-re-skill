@@ -64,7 +64,7 @@ import ghidra.program.model.symbol.Symbol;
  *   output_dir=<path>    Directory for the report JSON. Required.
  *   dry_run=true         Classify and report but do not rename or inline.
  *   inline=true          Mark pure helpers as inline (default: true).
- *   skip_stubs=true      Skip category-B auth stubs entirely (default: true).
+ *   skip_stubs=true      Skip category-B auth stubs entirely (default: false).
  *   verbose=true         Print each rename to the script console.
  */
 public class ResolveSwiftOutlined extends GhidraScript {
@@ -221,7 +221,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		String outputDir = requireArg(args, "output_dir");
 		boolean dryRun = "true".equalsIgnoreCase(args.getOrDefault("dry_run", "false"));
 		boolean doInline = !"false".equalsIgnoreCase(args.getOrDefault("inline", "true"));
-		boolean skipStubs = !"false".equalsIgnoreCase(args.getOrDefault("skip_stubs", "true"));
+		boolean skipStubs = !"false".equalsIgnoreCase(args.getOrDefault("skip_stubs", "false"));
 		boolean verbose = "true".equalsIgnoreCase(args.getOrDefault("verbose", "false"));
 
 		Listing listing = currentProgram.getListing();
