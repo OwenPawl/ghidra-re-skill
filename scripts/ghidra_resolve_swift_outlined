@@ -146,10 +146,11 @@ with open(report_path) as f:
 
 print(f"\nSwift outlined resolution complete for {r['program_name']}")
 print(f"  Total _OUTLINED_FUNCTION_* found: {r['total_outlined_functions']}")
-print(f"  Renamed:       {r['renamed']}")
-print(f"  Marked inline: {r['inlined']}")
-print(f"  Skipped stubs: {r['skipped_stubs']}")
-print(f"  Dry run:       {r['dry_run']}")
+print(f"  Renamed:             {r['renamed']}")
+print(f"  Pactail updated (p2):{r.get('pactail_updated_pass2', 0)}")
+print(f"  Marked inline:       {r['inlined']}")
+print(f"  Skipped stubs:       {r['skipped_stubs']}")
+print(f"  Dry run:             {r['dry_run']}")
 print(f"\n  Category breakdown:")
 for cat, count in r.get('categories', {}).items():
     print(f"    {cat:<30s} {count:>5d}")

@@ -223,6 +223,14 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		boolean doInline = !"false".equalsIgnoreCase(args.getOrDefault("inline", "true"));
 		boolean skipStubs = !"false".equalsIgnoreCase(args.getOrDefault("skip_stubs", "false"));
 		boolean verbose = "true".equalsIgnoreCase(args.getOrDefault("verbose", "false"));
+		// scan_fun_stubs: also process 16-byte FUN_* functions that match the authstub pattern.
+		// Dyld-extracted binaries often have authstubs in a dense region that Ghidra names FUN_*
+		// instead of _OUTLINED_FUNCTION_*, because they were not adjacent to the outlined helpers.
+		boolean scanFunStubs = !"false".equalsIgnoreCase(args.getOrDefault("scan_fun_stubs", "true"));
+		// second_pass: after the main rename loop, do a follow-up pass that re-resolves pactail
+		// branch targets.  This lets pactail functions pick up callee names that were only
+		// available after the main pass renamed FUN_ authstubs or other targets.
+		boolean secondPass = !"false".equalsIgnoreCase(args.getOrDefault("second_pass", "true"));
 
 		Listing listing = currentProgram.getListing();
 		FunctionIterator iter = listing.getFunctions(true);
@@ -245,23 +253,30 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			boolean unresolvedOutlined = name.startsWith("_OUTLINED_FUNCTION_");
 			boolean existingAuthStub = name.startsWith("outlined$authstub$") ||
 				name.startsWith("outlined_authstub_");
-			if (!unresolvedOutlined && !existingAuthStub) continue;
+			// Also consider anonymous FUN_* functions that may be auth stubs missed by Ghidra's
+			// outlined-function detector (common in dyld-extracted __stubs regions).
+			// We will classify them below and skip any that don't match the authstub pattern.
+			boolean isFunCandidate = scanFunStubs && name.startsWith("FUN_");
+			if (!unresolvedOutlined && !existingAuthStub && !isFunCandidate) continue;
 			total++;
 
 			// Read instructions
 			AddressSetView body = fn.getBody();
 			long bodySize = body.getNumAddresses();
-			List<String> mnems = new ArrayList<>();
-			InstructionIterator insns = listing.getInstructions(body, true);
-			while (insns.hasNext()) {
-				Instruction insn = insns.next();
-				mnems.add(insn.getMnemonicString().toLowerCase());
-			}
+			List<String> mnems = getMnems(fn, listing);
 
 			// Classify
 			String category = null;
 			if (category == null) category = classifyAuthStub(mnems);
 			boolean isStub = "authstub".equals(category);
+
+			// For FUN_ candidates, only continue if the pattern actually matches an authstub.
+			// We don't want to rename arbitrary FUN_ functions that happen to be small.
+			if (isFunCandidate && !isStub) {
+				total--;
+				continue;
+			}
+
 			if (isStub && skipStubs) {
 				skipped++;
 				continue;
@@ -290,13 +305,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			// Only use the callee name when it is a real symbol (not FUN_xxxx or
 			// another _OUTLINED_FUNCTION_ which hasn't been renamed yet).
 			if (category != null && category.startsWith("pactail")) {
-				String calleeName = resolveBranchTarget(fn, listing);
-				if (calleeName != null
-						&& !calleeName.isEmpty()
-						&& !calleeName.startsWith("FUN_")
-						&& !calleeName.startsWith("_OUTLINED_FUNCTION_")) {
-					newName = "outlined$" + category + "$" + sanitizeNameFragment(calleeName, 60);
-				}
+				newName = resolvePactailName(fn, listing, category, newName);
 			}
 
 			// Determine whether to mark as inline:
@@ -334,6 +343,62 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			renames.add(rec);
 		}
 
+		// Second pass: re-resolve pactail branch targets now that FUN_ authstubs and other
+		// targets have been renamed in the main pass.  Only pactail functions whose name is
+		// still the generic "outlined$pactail$NNNN" form (4-digit numeric suffix) are eligible;
+		// functions that already got a callee-embedded name are left alone.
+		int pactailUpdated = 0;
+		if (secondPass && !dryRun && !monitor.isCancelled()) {
+			FunctionIterator iter2 = listing.getFunctions(true);
+			while (iter2.hasNext() && !monitor.isCancelled()) {
+				Function fn = iter2.next();
+				String name2 = fn.getName();
+				if (!name2.startsWith("outlined$pactail$")) continue;
+				String suffix = name2.substring("outlined$pactail$".length());
+				// Only re-process if the suffix is purely numeric (no callee embedded yet).
+				// Variants like outlined$pactail$argshuffle$NNNN also end with digits but have
+				// an intermediate segment — the regex check catches only the 4-digit index form.
+				if (!suffix.matches("\\d{4}")) continue;
+
+				String calleeName = resolveBranchTarget(fn, listing);
+				if (calleeName == null || calleeName.isEmpty()) continue;
+				if (calleeName.startsWith("FUN_") || calleeName.startsWith("_OUTLINED_FUNCTION_")) continue;
+
+				// Strip "outlined$" prefix to avoid redundant "outlined$pactail$outlined$authstub$..."
+				if (calleeName.startsWith("outlined$")) {
+					calleeName = calleeName.substring("outlined$".length());
+				}
+
+				// Re-classify to get the right variant tag for the new name.
+				List<String> mnems2 = getMnems(fn, listing);
+				String pactailCat = classifyPacTail(mnems2);
+				if (pactailCat == null) pactailCat = "pactail";
+
+				String newPactailName = "outlined$" + pactailCat + "$"
+						+ sanitizeNameFragment(calleeName, 60);
+				if (newPactailName.equals(name2)) continue;
+
+				fn.setName(newPactailName, SourceType.ANALYSIS);
+				pactailUpdated++;
+				if (verbose) {
+					println("[pass2] " + name2 + " → " + newPactailName);
+				}
+
+				JsonObject rec = new JsonObject();
+				rec.addProperty("old_name", name2);
+				rec.addProperty("new_name", newPactailName);
+				rec.addProperty("category", pactailCat + "$pass2");
+				rec.addProperty("entry", fn.getEntryPoint().toString());
+				rec.addProperty("body_size", fn.getBody().getNumAddresses());
+				rec.addProperty("instruction_count", mnems2.size());
+				rec.addProperty("marked_inline", false);
+				renames.add(rec);
+			}
+			if (pactailUpdated > 0) {
+				println("ResolveSwiftOutlined: second pass updated " + pactailUpdated + " pactail names.");
+			}
+		}
+
 		// Write report
 		JsonObject report = new JsonObject();
 		report.addProperty("program_name", currentProgram.getName());
@@ -342,6 +407,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		report.addProperty("renamed", renamed);
 		report.addProperty("inlined", inlined);
 		report.addProperty("skipped_stubs", skipped);
+		report.addProperty("pactail_updated_pass2", pactailUpdated);
 		JsonObject cats = new JsonObject();
 		for (Map.Entry<String, Integer> e : categoryCounts.entrySet()) {
 			cats.addProperty(e.getKey(), e.getValue());
@@ -359,6 +425,41 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		println("ResolveSwiftOutlined: " + total + " found, " + renamed + " renamed"
 				+ (dryRun ? " (dry run)" : "") + ", " + inlined + " marked inline. "
 				+ "Report: " + outFile.getAbsolutePath());
+	}
+
+	/** Collect all mnemonic strings for the instructions in fn's body. */
+	private List<String> getMnems(Function fn, Listing listing) {
+		List<String> mnems = new ArrayList<>();
+		InstructionIterator insns = listing.getInstructions(fn.getBody(), true);
+		while (insns.hasNext()) {
+			mnems.add(insns.next().getMnemonicString().toLowerCase());
+		}
+		return mnems;
+	}
+
+	/**
+	 * Build the pactail name, embedding the branch-target callee name when it is
+	 * meaningful.  Falls back to the numeric-index name supplied by the caller.
+	 *
+	 * Accepts authstub-named callees (outlined$authstub$...) so that pactail → authstub
+	 * chains get names like "outlined$pactail$authstub$slot_ADDR" after the main pass
+	 * has renamed the authstubs.  The "outlined$" prefix of the callee is stripped to
+	 * avoid the redundant "outlined$pactail$outlined$authstub$..." form.
+	 * Generic FUN_* and still-unresolved _OUTLINED_FUNCTION_* names are excluded.
+	 */
+	private String resolvePactailName(Function fn, Listing listing, String category,
+			String fallbackName) {
+		String calleeName = resolveBranchTarget(fn, listing);
+		if (calleeName == null || calleeName.isEmpty()) return fallbackName;
+		if (calleeName.startsWith("FUN_") || calleeName.startsWith("_OUTLINED_FUNCTION_")) {
+			return fallbackName;
+		}
+		// Strip the "outlined$" prefix so we don't double-embed it.
+		// e.g. "outlined$authstub$slot_X" becomes "authstub$slot_X".
+		if (calleeName.startsWith("outlined$")) {
+			calleeName = calleeName.substring("outlined$".length());
+		}
+		return "outlined$" + category + "$" + sanitizeNameFragment(calleeName, 60);
 	}
 
 	/**

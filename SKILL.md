@@ -77,7 +77,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 10. Export the default Apple-focused bundle:
    - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
 11. For Swift-heavy Apple targets, resolve `_OUTLINED_FUNCTION_*` stubs **before** exporting or decompiling — this is essential for any dyld-extracted binary (WorkflowKit, BackgroundTaskAgent, etc.) where the Swift compiler outlined ARC/copy/move helpers:
-   - `"$SKILL_ROOT/scripts/ghidra_resolve_swift_outlined" <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true]`
+   - `"$SKILL_ROOT/scripts/ghidra_resolve_swift_outlined" <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true] [scan_fun_stubs=true] [second_pass=true]`
    - Re-export the Apple bundle afterwards to get updated function names in the inventory.
 12. Generate a surface-level report before chasing individual mangled symbols:
    - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
@@ -156,7 +156,8 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 ### 3) Resolve Swift outlined functions (Swift-heavy binaries only)
 - For any dyld-extracted or Swift-heavy binary, run `scripts/ghidra_resolve_swift_outlined` **before** exporting or decompiling. This renames 3,000–4,000 anonymous `_OUTLINED_FUNCTION_*` stubs to descriptive names (`outlined$argshuffle$`, `outlined$pactail$swift_retain$`, `outlined$loadglobal$`, `outlined$authstub$`, etc.) and marks pure ARC helpers as inline. Without this, the decompiler output for any Swift method that calls retain/release is dominated by opaque `_OUTLINED_FUNCTION_0()` calls that hide the real control flow.
 - Re-run `scripts/ghidra_export_apple_bundle` afterwards to regenerate the function inventory with updated names.
-- The script classifies outlined stubs into: `argshuffle`, `pactail` (PAC-guarded tail call — resolved to callee name), `loadglobal`, `loadmov`, `compare`, `pacsign`, `authstub` (unresolved import stubs, renamed by default), and `misc`.
+- The script runs in two passes by default (`second_pass=true`): the main pass renames `_OUTLINED_FUNCTION_*` and anonymous 16-byte `FUN_*` stubs (`scan_fun_stubs=true`), then a second pass re-resolves pactail branch-target names using the now-renamed callees. This is important for dyld-extracted binaries where the `__stubs` region is named `FUN_*` instead of `_OUTLINED_FUNCTION_*` by Ghidra.
+- Categories: `argshuffle`, `pactail` (PAC-guarded tail call — callee name embedded when resolved), `loadglobal`, `loadmov`, `compare`, `pacsign`, `authstub` (renamed by default, named by GOT slot address in dyld extracts), and `misc`.
 
 ### 4) Use the Apple export bundle
 - Run `scripts/ghidra_export_apple_bundle` after import unless the user only wants a narrow script run.
@@ -215,7 +216,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_import_macos_framework </System/.../Framework.framework[/Framework]> [project_name] [copy=cache|direct] [source=<name>]`
 - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
 - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-- `scripts/ghidra_resolve_swift_outlined <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true] [verbose=true]`
+- `scripts/ghidra_resolve_swift_outlined <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true] [scan_fun_stubs=true] [second_pass=true] [verbose=true]`
 - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
 - `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
 - `scripts/ghidra_objc_surface_report <project_name> <program_name> [format=json|markdown]`
