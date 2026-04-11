@@ -1,6 +1,6 @@
 ---
 name: ghidra-re
-description: Use for Ghidra-based reverse engineering on this machine, especially Apple Mach-O and dyld-extracted binaries. Trigger when the user wants headless Ghidra import/analysis, to run Ghidra scripts, inspect decompilation, or export structured reversing artifacts such as functions, strings, symbols, Objective-C metadata, or xrefs. Prefer this skill over ad hoc shell commands when the task should create or reuse a Ghidra project under ~/ghidra-projects.
+description: Use for Ghidra-based reverse engineering on this machine, especially Apple Mach-O and dyld-extracted binaries. Trigger when the user wants headless Ghidra import/analysis, to run Ghidra scripts, inspect decompilation, or export structured reversing artifacts such as functions, strings, symbols, Objective-C metadata, or xrefs. Prefer this skill over ad hoc shell commands when the task should create or reuse a Ghidra project under ~/ghidra-projects. Works identically whether loaded by OpenAI Codex or Anthropic Claude Code.
 ---
 
 # Ghidra RE
@@ -14,7 +14,39 @@ Use this skill for repeatable, headless-first Ghidra work on macOS or Windows. I
   - macOS: `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
   - Windows: `/c/Program Files/Eclipse Adoptium/jdk-21`
 - Workspace root: `~/ghidra-projects`
-- Skill root: `~/.codex/skills/ghidra-re`
+- Skill root — **resolve this first** before running any script (see below)
+
+The skill is host-agnostic. Every script under `scripts/` resolves its own root from `$BASH_SOURCE`, so there is no hardcoded install location. The unified host layer lives in `scripts/lib/skill_host.sh` and is the single source of truth for Codex vs Claude Code install paths. Use `scripts/install_skill --host auto|codex|claude|both` to copy the checkout into one or more hosts.
+
+## Resolving the Skill Root
+
+Before running any `scripts/` command, resolve `SKILL_ROOT` with this one-liner. It checks the standard install locations first, then searches Claude Code's plugin directory as a fallback — covering every load path automatically:
+
+```bash
+SKILL_ROOT="$(
+  for p in \
+    "${CODEX_HOME:-$HOME/.codex}/skills/ghidra-re" \
+    "${CLAUDE_HOME:-$HOME/.claude}/skills/ghidra-re"; do
+    [[ -f "$p/SKILL.md" ]] && printf '%s' "$p" && break
+  done
+)" ; [[ -z "$SKILL_ROOT" ]] && SKILL_ROOT="$(
+  find "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin" \
+    -maxdepth 5 -name 'SKILL.md' -path '*/ghidra-re/SKILL.md' 2>/dev/null \
+    | head -1 | xargs -I{} dirname {}
+)"
+echo "Skill root: $SKILL_ROOT"
+```
+
+Once set, prefix every `scripts/` call with `"$SKILL_ROOT/"`:
+```bash
+"$SKILL_ROOT/scripts/bootstrap"
+"$SKILL_ROOT/scripts/ghidra_import_analyze" <binary> [project_name]
+```
+
+Known root paths (for reference — use the discovery snippet above rather than hardcoding):
+- `~/.codex/skills/ghidra-re` — OpenAI Codex standard install
+- `~/.claude/skills/ghidra-re` — Claude Code standard install via `install_skill`
+- `~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/.../skills/ghidra-re` — Claude Code plugin install (UUID subdirectories vary per machine)
 
 V1 is optimized for Apple Mach-O reversing and dyld-extracted binaries. It now includes a localhost GUI bridge extension for live inspection, annotation, and controlled program surgery inside open Ghidra sessions, plus mission workspaces for multi-target investigation across frameworks, daemons, and helpers.
 
@@ -23,8 +55,10 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 
 ## Quick Start
 
-1. On a fresh machine, run `scripts/bootstrap` once.
-2. If bootstrap cannot find Ghidra or Java 21, run `scripts/doctor`.
+> All `scripts/` paths below are relative to `$SKILL_ROOT`. Run the discovery snippet in "Resolving the Skill Root" first, then prefix every command with `"$SKILL_ROOT/"`.
+
+1. On a fresh machine, run `"$SKILL_ROOT/scripts/bootstrap"` once.
+2. If bootstrap cannot find Ghidra or Java 21, run `"$SKILL_ROOT/scripts/doctor"`.
 3. On Windows, if the targets live in a mounted or extracted macOS image, register that source first:
    - `scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache`
 4. Start a multi-target mission when the task spans more than one framework, daemon, or helper:
@@ -98,7 +132,7 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 - Multi-target investigation workspaces live under `~/ghidra-projects/investigations/<mission_name>/`.
 - Source-backed imports are cached under `~/ghidra-projects/sources/<source_name>/` by default when you use `source:name:/path`.
 - Prefer explicit project names for reusable work. If omitted, the import wrapper derives one from the binary basename.
-- On Windows, the PowerShell module resolves the installed skill root automatically from `CODEX_HOME` or `~/.codex/skills/ghidra-re`, then forwards to the same script surface.
+- On Windows, the PowerShell module resolves the installed skill root automatically from `CODEX_HOME`, `CLAUDE_HOME`, `~/.codex/skills/ghidra-re`, or `~/.claude/skills/ghidra-re`, then forwards to the same script surface regardless of which host loaded the skill.
 
 ### 2) Use missions for cross-target work
 - Prefer `scripts/ghidra_mission_start` whenever the question spans multiple frameworks, daemons, or XPC helpers.
