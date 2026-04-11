@@ -177,15 +177,16 @@ public class ResolveSwiftOutlined extends GhidraScript {
 	}
 
 	/**
-	 * Small (≤ 8 insns) helper that ends in ret or b and mixes loads/stores/arithmetic.
+	 * Small (≤ 16 insns) helper that ends in ret or b and mixes loads/stores/arithmetic.
 	 * Too specific to match a known ARC template but clearly a shared computation
 	 * helper extracted by the compiler. Rename as "helper$Nb" for readability.
-	 * The limit is 8 (32 bytes) to cover simple outlined thunks that the compiler
-	 * extracted but that aren't PAC-authenticated authstubs.
+	 * The limit is 16 (64 bytes) matching the upper bound for misc reprocessing.
+	 * classifyCallWrapper must run before this so that single-bl wrappers get the
+	 * more descriptive callwrap$CALLEE name.
 	 */
 	private static String classifySmallHelper(List<String> mnems, int bodySize) {
 		if (mnems.isEmpty()) return null;
-		if (mnems.size() > 8) return null;
+		if (mnems.size() > 16) return null;
 		String last = mnems.get(mnems.size() - 1);
 		// Accept ret or unconditional b (tail call without PAC guard)
 		if (!last.startsWith("ret") && !last.equals("b")) return null;
@@ -214,6 +215,34 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		boolean hasCset = mnems.stream().anyMatch(m -> m.startsWith("cset") || m.startsWith("csel"));
 		if (hasCmp && hasCset) return "compare";
 		return null;
+	}
+
+	/**
+	 * Outlined call wrapper: a function whose primary purpose is to call exactly one
+	 * external function and return.  The compiler extracts these when the same
+	 * call-with-specific-args pattern is repeated enough times.  The callee name is
+	 * embedded in the category so callers can see what is being wrapped without
+	 * opening the decompiler.
+	 * Pattern: optional stack frame setup, exactly one bl/blr-free bl to a named
+	 * callee, optional teardown, ret.
+	 */
+	private String classifyCallWrapper(Function fn, Listing listing, List<String> mnems) {
+		if (mnems.isEmpty()) return null;
+		// Must end in ret
+		if (!mnems.get(mnems.size() - 1).startsWith("ret")) return null;
+		// Must not have any PAC indirect branches
+		if (mnems.stream().anyMatch(m -> m.startsWith("bra") || m.startsWith("blra"))) return null;
+		if (mnems.stream().anyMatch(m -> m.equals("br") || m.equals("blr"))) return null;
+		// Must have exactly one bl (direct call)
+		long blCount = mnems.stream().filter(m -> m.equals("bl")).count();
+		if (blCount != 1) return null;
+		// Resolve the bl target
+		String callee = resolveBlCallTarget(fn, listing);
+		if (callee == null || callee.isEmpty()) return null;
+		if (callee.startsWith("FUN_") || callee.startsWith("_OUTLINED_FUNCTION_")) return null;
+		// Strip outlined$ prefix to keep names compact
+		if (callee.startsWith("outlined$")) callee = callee.substring("outlined$".length());
+		return "callwrap$" + sanitizeNameFragment(callee, 55);
 	}
 
 	/** Fallback. */
@@ -288,7 +317,9 @@ public class ResolveSwiftOutlined extends GhidraScript {
 
 			// For very large existing misc functions, skip — they are genuinely complex
 			// and the classifiers below are designed for small outlined helpers.
-			if (isExistingMisc && bodySize > 32) {
+			// 64 bytes (≤16 instructions) is the practical upper limit for a simple
+			// outlined stub or call wrapper; anything larger is real code.
+			if (isExistingMisc && bodySize > 64) {
 				total--;
 				continue;
 			}
@@ -318,6 +349,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			if (category == null) category = classifyGlobalLoad(mnems);
 			if (category == null) category = classifyLoadMov(mnems);
 			if (category == null) category = classifyPacTail(mnems);
+			if (category == null) category = classifyCallWrapper(fn, listing, mnems);
 			if (category == null) category = classifySmallHelper(mnems, (int) bodySize);
 			if (category == null) category = classifyFallback(mnems, (int) bodySize);
 
@@ -526,6 +558,34 @@ public class ResolveSwiftOutlined extends GhidraScript {
 					break;
 				}
 				insn = insn.getPrevious();
+			}
+		}
+		catch (Exception e) {
+			// best-effort — ignore
+		}
+		return null;
+	}
+
+	/**
+	 * Walk the function body looking for a bl (direct call) instruction and
+	 * return the name of the callee function.  Used by classifyCallWrapper.
+	 */
+	private String resolveBlCallTarget(Function fn, Listing listing) {
+		try {
+			InstructionIterator insns = listing.getInstructions(fn.getBody(), true);
+			while (insns.hasNext()) {
+				Instruction insn = insns.next();
+				if (!insn.getMnemonicString().equalsIgnoreCase("bl")) continue;
+				Reference[] refs = insn.getReferencesFrom();
+				for (Reference ref : refs) {
+					if (ref.getReferenceType().isFlow()) {
+						Address target = ref.getToAddress();
+						Function targetFn = currentProgram.getFunctionManager().getFunctionAt(target);
+						if (targetFn != null) return targetFn.getName();
+						Symbol sym = currentProgram.getSymbolTable().getPrimarySymbol(target);
+						if (sym != null) return sym.getName();
+					}
+				}
 			}
 		}
 		catch (Exception e) {
