@@ -5,7 +5,9 @@
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.OutputStreamWriter;
+import java.io.Reader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -16,6 +18,7 @@ import java.util.Map;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import ghidra.app.script.GhidraScript;
@@ -278,6 +281,21 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		// available after the main pass renamed FUN_ authstubs or other targets.
 		boolean secondPass = !"false".equalsIgnoreCase(args.getOrDefault("second_pass", "true"));
 
+		// authstub_map: optional JSON sidecar built by ghidra_build_authstub_map.  When present,
+		// auth stub functions are renamed using the resolved dyld target symbol rather than the
+		// opaque GOT slot address.  The map is auto-discovered from output_dir if not specified.
+		Map<String, String> authStubMap = new LinkedHashMap<>();
+		String authStubMapPath = args.getOrDefault("authstub_map", "");
+		if (authStubMapPath.isEmpty()) {
+			File autoMap = new File(outputDir, "authstub_map.json");
+			if (autoMap.exists()) {
+				authStubMapPath = autoMap.getAbsolutePath();
+			}
+		}
+		if (!authStubMapPath.isEmpty()) {
+			authStubMap = loadAuthStubMap(authStubMapPath);
+		}
+
 		Listing listing = currentProgram.getListing();
 		FunctionIterator iter = listing.getFunctions(true);
 
@@ -358,9 +376,19 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			String newName = "outlined$" + category + "$" + String.format("%04d", idx);
 
 			if (isStub) {
-				String descriptor = resolveAuthStubDescriptor(fn, listing);
-				if (descriptor != null && !descriptor.isEmpty()) {
-					newName = "outlined$authstub$" + descriptor;
+				// Prefer the pre-built dyld cache map (real symbol names).
+				// The map keys are lowercase hex with "0x" prefix,
+				// matching the output of hex(stub_addr) in Python.
+				String entryHex = "0x" + fn.getEntryPoint().toString().toLowerCase();
+				String mappedName = authStubMap.get(entryHex);
+				if (mappedName != null && !mappedName.isEmpty()) {
+					newName = "outlined$authstub$" + sanitizeNameFragment(mappedName, 80);
+				} else {
+					// Fall back to Ghidra's LDR-reference descriptor (slot address or symbol)
+					String descriptor = resolveAuthStubDescriptor(fn, listing);
+					if (descriptor != null && !descriptor.isEmpty()) {
+						newName = "outlined$authstub$" + descriptor;
+					}
 				}
 			}
 
@@ -630,6 +658,38 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			// best-effort — ignore
 		}
 		return null;
+	}
+
+	/**
+	 * Load the authstub_map.json produced by ghidra_build_authstub_map.
+	 * Returns a map from lowercase hex stub address (e.g. "0x27c40f200") to
+	 * the sanitized Ghidra-safe symbol name (e.g. "swift_retain").
+	 */
+	private Map<String, String> loadAuthStubMap(String path) {
+		Map<String, String> map = new LinkedHashMap<>();
+		try {
+			Gson gson = new Gson();
+			try (Reader r = new FileReader(path)) {
+				JsonObject root = gson.fromJson(r, JsonObject.class);
+				JsonObject stubs = root == null ? null : root.getAsJsonObject("stubs");
+				if (stubs != null) {
+					for (Map.Entry<String, JsonElement> e : stubs.entrySet()) {
+						JsonObject entry = e.getValue().getAsJsonObject();
+						JsonElement nameEl = entry.get("name");
+						if (nameEl != null) {
+							// Normalise to lowercase so address comparison is case-insensitive
+							map.put(e.getKey().toLowerCase(), nameEl.getAsString());
+						}
+					}
+				}
+			}
+			println("ResolveSwiftOutlined: loaded " + map.size()
+					+ " authstub name mappings from " + path);
+		} catch (Exception e) {
+			printerr("ResolveSwiftOutlined: failed to load authstub map from "
+					+ path + ": " + e.getMessage());
+		}
+		return map;
 	}
 
 	private String sanitizeNameFragment(String value, int maxLength) {

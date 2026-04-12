@@ -86,11 +86,36 @@ while IFS= read -r -d '' item; do
   optional_args+=("$item")
 done < <(ghidra_re_optional_headless_args)
 
-# Build the script args to pass through
-script_arg_str="output_dir=${export_dir}"
+# ── Pre-process extra_script_args: pull out tool-level flags that should not
+#    be forwarded to the Java script.
+#      build_authstub_map=true  → build the authstub map before the headless run
+#      cache_path=<path>        → override dyld cache path for the map builder
+java_script_args=()
+build_authstub_map_flag=0
+cache_path_override=""
 for extra in "${extra_script_args[@]}"; do
-  script_arg_str="${script_arg_str}' '${extra}"
+  case "$extra" in
+    build_authstub_map=true)  build_authstub_map_flag=1 ;;
+    cache_path=*)             cache_path_override="${extra#cache_path=}" ;;
+    *)                        java_script_args+=("$extra") ;;
+  esac
 done
+
+# Optionally build (or refresh) the authstub map before the headless run.
+# The map is stored in the export dir and auto-discovered by ResolveSwiftOutlined.java.
+if [[ "$build_authstub_map_flag" -eq 1 ]]; then
+  printf '\nghidra-re: building authstub map before headless run...\n'
+  if [[ -n "$cache_path_override" ]]; then
+    GHIDRA_RE_DYLD_CACHE_PATH="$cache_path_override" \
+      "$SCRIPT_DIR/ghidra_build_authstub_map" \
+        "$project_name" "$program_name" || \
+      printf 'ghidra-re: authstub map build failed — continuing without it\n'
+  else
+    "$SCRIPT_DIR/ghidra_build_authstub_map" \
+      "$project_name" "$program_name" || \
+      printf 'ghidra-re: authstub map build failed — continuing without it\n'
+  fi
+fi
 
 # If the project is open in the GUI, use a read-only snapshot.
 # The headless run will rename in the snapshot; we then offer to
@@ -123,7 +148,7 @@ fi
 cmd+=(-postScript ResolveSwiftOutlined.java)
 # Pass each extra arg as a separate script argument
 cmd+=("output_dir=${export_dir}")
-for extra in "${extra_script_args[@]}"; do
+for extra in "${java_script_args[@]}"; do
   cmd+=("$extra")
 done
 cmd+=(
@@ -160,9 +185,10 @@ PYEOF
 # If we operated on a read-only snapshot but renames were requested,
 # apply them back to the live project via the bridge rename endpoint.
 if [[ "$use_readonly" -eq 1 ]]; then
-  # Check if dry_run was set
+  # Check if dry_run was set (check java_script_args; build_authstub_map/cache_path
+  # were already stripped out and never affect dry_run semantics)
   dry_run_flag=0
-  for extra in "${extra_script_args[@]}"; do
+  for extra in "${java_script_args[@]}"; do
     [[ "$extra" == "dry_run=true" ]] && dry_run_flag=1
   done
 

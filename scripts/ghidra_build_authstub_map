@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+#
+# ghidra_build_authstub_map
+#
+# Builds a JSON sidecar file mapping each auth stub address in a
+# dyld-extracted binary to the actual target symbol resolved from
+# the live dyld shared cache.  The resulting file is saved alongside
+# the program's Ghidra export bundle and consumed automatically by
+# ghidra_resolve_swift_outlined to replace opaque slot addresses
+# (e.g. "authstub$slot_299e44d08") with real names
+# (e.g. "authstub$swift_release").
+#
+# Requirements:
+#   • The program must be a Mach-O binary extracted from the dyld
+#     shared cache (arm64e, macOS).
+#   • The matching dyld shared cache must exist (default: system cache).
+#   • dyld_info, xcrun, python3 must be available.
+#
+# Usage:
+#   ghidra_build_authstub_map <binary_path> <project_name> <program_name>
+#   ghidra_build_authstub_map <project_name> <program_name>
+#
+# Environment:
+#   GHIDRA_RE_DYLD_CACHE_DIR   Override cache directory (default: system path)
+#   GHIDRA_RE_DYLD_CACHE_PATH  Override full path to main cache file
+#
+# Output:
+#   <exports>/<project_name>/<program_name>/authstub_map.json
+#   Prints a summary and the output file path to stdout on success.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+CACHE_DIR="${GHIDRA_RE_DYLD_CACHE_DIR:-/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld}"
+CACHE_PATH="${GHIDRA_RE_DYLD_CACHE_PATH:-$CACHE_DIR/dyld_shared_cache_arm64e}"
+
+usage() {
+  sed -n '3,37p' "$0"
+}
+
+# Parse arguments: accept either binary_path project program or project program
+binary_path=""
+project_name=""
+program_name=""
+
+if [[ $# -eq 3 ]]; then
+  binary_path="$1"
+  project_name="$2"
+  program_name="$3"
+elif [[ $# -eq 2 ]]; then
+  project_name="$1"
+  program_name="$2"
+  binary_path="$program_name"   # basename used as framework name lookup
+elif [[ $# -eq 1 ]]; then
+  binary_path="$1"
+  binary_basename="$(basename "$binary_path")"
+  project_name="$binary_basename"
+  program_name="$binary_basename"
+else
+  usage >&2
+  exit 1
+fi
+
+ghidra_re_require_tools
+ghidra_re_export_env
+
+export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
+output_file="$export_dir/authstub_map.json"
+mkdir -p "$export_dir"
+
+[[ -f "$CACHE_PATH" ]] || ghidra_re_die "dyld shared cache not found at $CACHE_PATH"
+
+printf 'ghidra-re: building authstub map for %s/%s\n' "$project_name" "$program_name"
+printf '  Cache: %s\n' "$CACHE_PATH"
+
+result=$(python3 - "$binary_path" "$CACHE_PATH" "$CACHE_DIR" "$output_file" <<'PY'
+import sys, json, struct, os, re, subprocess
+
+binary_path = sys.argv[1]
+cache_path  = sys.argv[2]
+cache_dir   = sys.argv[3]
+output_file = sys.argv[4]
+
+CACHE_BASE = 0x180000000
+
+# ── Determine the binary name for framework path discovery ────────────────────
+binary_name = os.path.basename(binary_path)
+if not binary_name or binary_name == ".":
+    print(json.dumps({"ok": False, "error": "Could not determine binary name"}))
+    sys.exit(1)
+
+# ── 1. Locate the framework in the dyld cache ─────────────────────────────────
+framework_path = None
+for candidate in [
+    f"/System/Library/PrivateFrameworks/{binary_name}.framework/{binary_name}",
+    f"/System/Library/Frameworks/{binary_name}.framework/{binary_name}",
+    f"/usr/lib/{binary_name}.dylib",
+    f"/usr/lib/swift/lib{binary_name}.dylib",
+]:
+    r = subprocess.run(["dyld_info", "-segments", candidate],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and "__TEXT" in r.stdout:
+        framework_path = candidate
+        break
+
+if not framework_path:
+    print(json.dumps({"ok": False,
+                      "error": f"Cannot locate {binary_name!r} in dyld cache"}))
+    sys.exit(1)
+
+# ── 2. Parse __auth_stubs disassembly → stub_addr → GOT slot addr ─────────────
+r = subprocess.run(
+    ["dyld_info", "-section", "__TEXT", "__auth_stubs", framework_path],
+    capture_output=True, text=True)
+
+stub_to_got = {}
+current_stub = None
+got_page = None
+
+for line in r.stdout.splitlines():
+    line = line.strip()
+    # adrp line establishes the stub address and page base
+    m = re.match(r'(0x[0-9a-fA-F]+)\s+adrp\s+\S+.*?;\s+(0x[0-9a-fA-F]+)', line)
+    if m:
+        current_stub = int(m.group(1), 16)
+        got_page = int(m.group(2), 16)
+        continue
+    # add line gives the slot offset within that page
+    m = re.match(r'0x[0-9a-fA-F]+\s+add\s+\S+,\s+\S+,\s+#(0x[0-9a-fA-F]+)', line)
+    if m and got_page is not None and current_stub is not None:
+        slot = got_page + int(m.group(1), 16)
+        stub_to_got[current_stub] = slot
+        got_page = None
+        continue
+    # ldr variant: some stubs use adrp + ldr #offset (page-relative immediate)
+    m = re.match(r'0x[0-9a-fA-F]+\s+ldr\s+\S+,\s+\[.*?#(0x[0-9a-fA-F]+)\]', line)
+    if m and got_page is not None and current_stub is not None:
+        slot = got_page + int(m.group(1), 16)
+        stub_to_got[current_stub] = slot
+        got_page = None
+
+if not stub_to_got:
+    print(json.dumps({"ok": False,
+                      "error": f"No auth stubs found in disassembly for {framework_path}"}))
+    sys.exit(1)
+
+# ── 3. Build vmaddr→(file_path, file_offset) map from all sub-cache files ─────
+all_mappings = []  # (vmaddr_start, size, fpath, file_offset)
+
+for fname in sorted(os.listdir(cache_dir)):
+    if not fname.startswith("dyld_shared_cache_arm64e"):
+        continue
+    fpath = os.path.join(cache_dir, fname)
+    if not os.path.isfile(fpath):
+        continue
+    try:
+        with open(fpath, 'rb') as f:
+            header = f.read(0x260)
+        # All cache files (main + sub-caches) start with dyld_v1 magic
+        if b'dyld_v1' not in header[:16]:
+            continue
+        mapping_offset = struct.unpack_from('<I', header, 0x10)[0]
+        mapping_count  = struct.unpack_from('<I', header, 0x14)[0]
+        with open(fpath, 'rb') as f:
+            f.seek(mapping_offset)
+            for _ in range(mapping_count):
+                raw = f.read(32)
+                if len(raw) < 24:
+                    break
+                vmaddr, size, file_off = struct.unpack_from('<QQQ', raw)
+                if vmaddr and size:
+                    all_mappings.append((vmaddr, size, fpath, file_off))
+    except Exception:
+        continue
+
+# Sort by vmaddr for binary search if needed
+all_mappings.sort()
+
+def read_u64_at(vmaddr):
+    """Read a little-endian uint64 from the given vmaddr across all sub-caches."""
+    for (start, size, fpath, file_off) in all_mappings:
+        if start <= vmaddr < start + size - 7:
+            with open(fpath, 'rb') as f:
+                f.seek(file_off + (vmaddr - start))
+                data = f.read(8)
+            if len(data) == 8:
+                return struct.unpack('<Q', data)[0]
+    return None
+
+# ── 4. Parse dyld_shared_cache_arm64e.map → image TEXT ranges ─────────────────
+map_file = os.path.join(cache_dir, "dyld_shared_cache_arm64e.map")
+text_ranges = []   # (start_vmaddr, end_vmaddr, image_path)
+image_text_base = {}  # image_path → TEXT start vmaddr
+current_img = None
+
+if os.path.exists(map_file):
+    with open(map_file) as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Image path lines start at column 0 with '/'
+            if stripped.startswith('/') and not re.match(r'\s', line[0]):
+                current_img = stripped
+                continue
+            # Segment lines: "    __TEXT   0xSTART -> 0xEND"
+            m = re.match(
+                r'\s+__TEXT\s+(0x[0-9a-fA-F]+)\s*->\s*(0x[0-9a-fA-F]+)', line)
+            if m and current_img:
+                start = int(m.group(1), 16)
+                end   = int(m.group(2), 16)
+                text_ranges.append((start, end, current_img))
+                if current_img not in image_text_base:
+                    image_text_base[current_img] = start
+
+text_ranges.sort()
+
+def find_image(vmaddr):
+    """Return (image_path, offset_from_text_start) or (None, None)."""
+    lo, hi = 0, len(text_ranges) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        start, end, path = text_ranges[mid]
+        if vmaddr < start:
+            hi = mid - 1
+        elif vmaddr >= end:
+            lo = mid + 1
+        else:
+            return path, vmaddr - start
+    return None, None
+
+# ── 5. Decode GOT slots → target vmaddrs ──────────────────────────────────────
+stub_to_target = {}
+for stub, got_slot in stub_to_got.items():
+    raw = read_u64_at(got_slot)
+    if raw is not None:
+        # ARM64e PAC pointer: strip PAC bits and add cache base
+        target = CACHE_BASE + (raw & 0x0000FFFFFFFFFFFF)
+        stub_to_target[stub] = target
+
+# ── 6. Identify which frameworks are needed ───────────────────────────────────
+from collections import Counter
+fw_needed = Counter()
+for stub, target in stub_to_target.items():
+    img, _ = find_image(target)
+    if img:
+        fw_needed[img] += 1
+
+# ── 7. Build vmaddr→mangled symbol for each needed framework ──────────────────
+vmaddr_to_sym = {}
+for fw_path, _ in fw_needed.most_common():
+    base = image_text_base.get(fw_path)
+    if base is None:
+        continue
+    try:
+        r = subprocess.run(
+            ["dyld_info", "-exports", fw_path],
+            capture_output=True, text=True, timeout=60)
+        for line in r.stdout.splitlines():
+            m = re.match(r'\s+(0x[0-9a-fA-F]+)\s+(\S+)', line)
+            if m:
+                vmaddr_to_sym[base + int(m.group(1), 16)] = m.group(2)
+    except Exception:
+        continue
+
+# ── 8. Map stubs to mangled symbols ───────────────────────────────────────────
+stub_to_mangled = {}
+for stub, target in stub_to_target.items():
+    sym = vmaddr_to_sym.get(target)
+    if sym:
+        stub_to_mangled[stub] = sym
+
+# ── 9. Batch demangle via xcrun swift-demangle (stdin mode) ───────────────────
+# In stdin mode swift-demangle outputs exactly one demangled (or unchanged) line
+# per input line in the same order, with NO "-->" separators.  We zip the input
+# list with the output list to build the symbol→demangled mapping.
+mangled_list = list(set(stub_to_mangled.values()))
+sym_to_demangled = {}
+if mangled_list:
+    try:
+        r = subprocess.run(
+            ["xcrun", "swift-demangle"],
+            input="\n".join(mangled_list),
+            capture_output=True, text=True, timeout=60)
+        output_lines = r.stdout.splitlines()
+        for mangled, demangled in zip(mangled_list, output_lines):
+            demangled = demangled.strip()
+            # If swift-demangle couldn't demangle, it returns the input unchanged
+            if demangled and demangled != mangled:
+                sym_to_demangled[mangled] = demangled
+    except Exception:
+        pass  # demangling is best-effort
+
+def sanitize(raw_name):
+    """
+    Convert a demangled (or mangled) symbol to a Ghidra-safe name fragment.
+    Handles all common Swift demangled forms:
+      • Plain: Module.Type.method(params) -> ReturnType
+      • Extension: (extension in Module):Module.Type.method(params) -> ...
+      • Property: Module.Type.prop.getter : ReturnType
+      • C/ObjC: _swift_retain, _objc_msgSend, ...
+    """
+    name = raw_name
+
+    # Strip "(extension in Module):" prefix before any other processing
+    name = re.sub(r'^\(extension in [^)]+\):', '', name)
+
+    # Strip leading '_' (C symbol convention) — keeps '__' prefixes intact
+    if name.startswith('_') and not name.startswith('__'):
+        name = name[1:]
+
+    # Drop everything after the first '(' — parameter list
+    name = re.sub(r'\(.*', '', name)
+
+    # Swift getter/property form: "Module.Type.prop.getter : ReturnType"
+    # Strip " : ReturnType" trailing annotation (anything after space-colon-space)
+    name = re.sub(r'\s*:\s*.+$', '', name)
+
+    # Swift async thunk / function type: " -> ReturnType"
+    name = re.sub(r'\s*->\s*\S.*$', '', name)
+
+    # Strip trailing ".getter" / ".setter" / ".modify" / ".read" keywords
+    name = re.sub(r'\.(getter|setter|modify|read)$', '', name)
+
+    name = name.strip()
+
+    # Normalise slashes → dots (Swift module/type separator in some forms)
+    name = re.sub(r'/', '.', name)
+
+    # Replace anything not alphanumeric, underscore, or dot with underscore
+    name = re.sub(r'[^A-Za-z0-9_.]', '_', name)
+
+    # Collapse repeated underscores / dots
+    name = re.sub(r'_+', '_', name)
+    name = re.sub(r'\.+', '.', name)
+
+    # Trim leading/trailing separators
+    name = name.strip('_.')
+
+    return name[:80]
+
+# ── 10. Build output ──────────────────────────────────────────────────────────
+output_stubs = {}
+for stub, mangled in stub_to_mangled.items():
+    demangled = sym_to_demangled.get(mangled, mangled)
+    safe_name = sanitize(demangled)
+    if not safe_name:
+        safe_name = sanitize(mangled)
+    output_stubs[hex(stub)] = {
+        "mangled":   mangled,
+        "demangled": demangled,
+        "name":      safe_name,
+    }
+
+result_obj = {
+    "binary":           binary_name,
+    "framework_path":   framework_path,
+    "cache_path":       cache_path,
+    "stub_count":       len(stub_to_got),
+    "resolved_count":   len(output_stubs),
+    "stubs":            output_stubs,
+}
+
+os.makedirs(os.path.dirname(output_file), exist_ok=True)
+with open(output_file, 'w') as f:
+    json.dump(result_obj, f, indent=2)
+
+print(json.dumps({
+    "ok":             True,
+    "output_file":    output_file,
+    "stub_count":     len(stub_to_got),
+    "resolved_count": len(output_stubs),
+}))
+PY
+)
+
+ok=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('ok', False))" 2>/dev/null || echo "False")
+if [[ "$ok" != "True" ]]; then
+  err=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
+  ghidra_re_die "authstub map failed: $err"
+fi
+
+stub_count=$(printf '%s' "$result"    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['stub_count'])")
+resolved_count=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resolved_count'])")
+pct=$(python3 -c "print(f'{100*${resolved_count}/${stub_count}:.0f}' if ${stub_count} else '0')")
+
+printf 'Authstub map built for %s/%s\n' "$project_name" "$program_name"
+printf '  Stubs: %s total, %s resolved (%s%%)\n' "$stub_count" "$resolved_count" "$pct"
+printf '  Output: %s\n' "$output_file"
+echo "$output_file"
