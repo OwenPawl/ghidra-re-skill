@@ -146,6 +146,42 @@ if not stub_to_got:
                       "error": f"No auth stubs found in disassembly for {framework_path}"}))
     sys.exit(1)
 
+# ── 2b. Parse __objc_stubs → stub_addr → name (label is embedded in output) ───
+# __objc_stubs use 8-instruction stubs for _objc_msgSend$Selector dispatch.
+# Unlike __auth_stubs, the target name is already in the label — no GOT
+# resolution needed.  Pattern:
+#   _objc_msgSend$SelectorName:
+#   0xADDR  adrp  x1, N  ; selector page
+#   0xADDR  ldr   x1, [x1, #off]
+#   0xADDR  adrp  x17, M ; GOT page
+#   0xADDR  add   x17, x17, #off
+#   ...
+r_objc = subprocess.run(
+    ["dyld_info", "-section", "__TEXT", "__objc_stubs", framework_path],
+    capture_output=True, text=True)
+
+objc_stub_names = {}   # stub_addr (int) → raw label string
+pending_label = None
+
+for line in r_objc.stdout.splitlines():
+    stripped = line.strip()
+    if not stripped:
+        continue
+    # Label line: starts with '_' (C symbol) and ends with ':'
+    # Exclude section-header lines like "__TEXT,__objc_stubs:"
+    if (stripped.endswith(':') and stripped.startswith('_')
+            and not stripped.startswith('__TEXT')):
+        pending_label = stripped.rstrip(':')
+        continue
+    # First instruction line for this label — grab stub entry address
+    if pending_label:
+        m = re.match(r'(0x[0-9a-fA-F]+)\s+', stripped)
+        if m:
+            addr = int(m.group(1), 16)
+            if addr not in objc_stub_names:
+                objc_stub_names[addr] = pending_label
+            pending_label = None  # only record first instruction per label
+
 # ── 3. Build vmaddr→(file_path, file_offset) map from all sub-cache files ─────
 all_mappings = []  # (vmaddr_start, size, fpath, file_offset)
 
@@ -343,6 +379,8 @@ def sanitize(raw_name):
 
 # ── 10. Build output ──────────────────────────────────────────────────────────
 output_stubs = {}
+
+# __auth_stubs: resolved via GOT → dyld export → demangle
 for stub, mangled in stub_to_mangled.items():
     demangled = sym_to_demangled.get(mangled, mangled)
     safe_name = sanitize(demangled)
@@ -352,15 +390,56 @@ for stub, mangled in stub_to_mangled.items():
         "mangled":   mangled,
         "demangled": demangled,
         "name":      safe_name,
+        "source":    "auth_stubs",
+    }
+
+# __objc_stubs: names are embedded in the disassembly labels directly
+# (_objc_msgSend$SelectorName → objc_msgSend_SelectorName)
+for stub_addr, raw_label in objc_stub_names.items():
+    key = hex(stub_addr)
+    if key in output_stubs:
+        continue  # already resolved via __auth_stubs
+    safe_name = sanitize(raw_label)
+    if not safe_name:
+        continue
+    output_stubs[key] = {
+        "mangled":   raw_label,
+        "demangled": raw_label,
+        "name":      safe_name,
+        "source":    "objc_stubs",
+    }
+
+# ── 10b. Build "slots" map: GOT slot addr → name (dyld backing) ───────────────
+# Pactail stubs (outlined$pactail$authstub$slot_ADDR) have their GOT slot
+# address embedded in their current name.  ResolveSwiftOutlined can use this
+# map to rename them without needing a separate stub-address lookup.
+output_slots = {}
+for stub, got_slot in stub_to_got.items():
+    mangled = stub_to_mangled.get(stub)
+    if not mangled:
+        continue
+    demangled = sym_to_demangled.get(mangled, mangled)
+    safe_name = sanitize(demangled)
+    if not safe_name:
+        safe_name = sanitize(mangled)
+    output_slots[hex(got_slot)] = {
+        "mangled":   mangled,
+        "demangled": demangled,
+        "name":      safe_name,
     }
 
 result_obj = {
-    "binary":           binary_name,
-    "framework_path":   framework_path,
-    "cache_path":       cache_path,
-    "stub_count":       len(stub_to_got),
-    "resolved_count":   len(output_stubs),
-    "stubs":            output_stubs,
+    "binary":              binary_name,
+    "framework_path":      framework_path,
+    "cache_path":          cache_path,
+    "auth_stub_count":     len(stub_to_got),
+    "auth_stub_resolved":  len(stub_to_mangled),
+    "objc_stub_count":     len(objc_stub_names),
+    "slot_count":          len(output_slots),
+    "stub_count":          len(stub_to_got),   # kept for back-compat
+    "resolved_count":      len(output_stubs),
+    "stubs":               output_stubs,
+    "slots":               output_slots,       # GOT slot addr → name (for pactail resolution)
 }
 
 os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -368,10 +447,13 @@ with open(output_file, 'w') as f:
     json.dump(result_obj, f, indent=2)
 
 print(json.dumps({
-    "ok":             True,
-    "output_file":    output_file,
-    "stub_count":     len(stub_to_got),
-    "resolved_count": len(output_stubs),
+    "ok":                True,
+    "output_file":       output_file,
+    "auth_stub_count":   len(stub_to_got),
+    "auth_stub_resolved": len(stub_to_mangled),
+    "objc_stub_count":   len(objc_stub_names),
+    "slot_count":        len(output_slots),
+    "resolved_count":    len(output_stubs),
 }))
 PY
 )
@@ -382,11 +464,17 @@ if [[ "$ok" != "True" ]]; then
   ghidra_re_die "authstub map failed: $err"
 fi
 
-stub_count=$(printf '%s' "$result"    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['stub_count'])")
+auth_count=$(printf '%s' "$result"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['auth_stub_count'])")
+auth_res=$(printf '%s' "$result"    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['auth_stub_resolved'])")
+objc_count=$(printf '%s' "$result"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['objc_stub_count'])")
+slot_count=$(printf '%s' "$result"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['slot_count'])")
 resolved_count=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resolved_count'])")
-pct=$(python3 -c "print(f'{100*${resolved_count}/${stub_count}:.0f}' if ${stub_count} else '0')")
+auth_pct=$(python3 -c "print(f'{100*${auth_res}/${auth_count}:.0f}' if ${auth_count} else '0')")
 
 printf 'Authstub map built for %s/%s\n' "$project_name" "$program_name"
-printf '  Stubs: %s total, %s resolved (%s%%)\n' "$stub_count" "$resolved_count" "$pct"
+printf '  __auth_stubs: %s total, %s resolved (%s%%)\n' "$auth_count" "$auth_res" "$auth_pct"
+printf '  __objc_stubs: %s named entries added\n' "$objc_count"
+printf '  slots (dyld backing): %s GOT slot mappings\n' "$slot_count"
+printf '  Total stubs: %s\n' "$resolved_count"
 printf '  Output: %s\n' "$output_file"
 echo "$output_file"

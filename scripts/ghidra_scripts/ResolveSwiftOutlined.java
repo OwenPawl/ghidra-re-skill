@@ -284,7 +284,10 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		// authstub_map: optional JSON sidecar built by ghidra_build_authstub_map.  When present,
 		// auth stub functions are renamed using the resolved dyld target symbol rather than the
 		// opaque GOT slot address.  The map is auto-discovered from output_dir if not specified.
+		// The "slots" section of the same file provides dyld backing for pactail functions whose
+		// callee was an authstub with an unresolved slot_* name at processing time.
 		Map<String, String> authStubMap = new LinkedHashMap<>();
+		Map<String, String> slotMap     = new LinkedHashMap<>();
 		String authStubMapPath = args.getOrDefault("authstub_map", "");
 		if (authStubMapPath.isEmpty()) {
 			File autoMap = new File(outputDir, "authstub_map.json");
@@ -294,6 +297,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		}
 		if (!authStubMapPath.isEmpty()) {
 			authStubMap = loadAuthStubMap(authStubMapPath);
+			slotMap     = loadSlotMap(authStubMapPath);
 		}
 
 		Listing listing = currentProgram.getListing();
@@ -490,6 +494,51 @@ public class ResolveSwiftOutlined extends GhidraScript {
 			}
 		}
 
+		// Pass 3 (dyld backing): resolve outlined$pactail$*$slot_HEXADDR names.
+		// These pactail functions had their branch target embedded as a slot address because
+		// the target authstub was still named slot_* at main-pass time.  Now that the authstub_map
+		// "slots" section gives us GOT slot → real name, we can replace the opaque address.
+		int pactailSlotUpdated = 0;
+		if (!dryRun && !slotMap.isEmpty() && !monitor.isCancelled()) {
+			final String SLOT_MARKER = "slot_";
+			FunctionIterator iter3 = listing.getFunctions(true);
+			while (iter3.hasNext() && !monitor.isCancelled()) {
+				Function fn = iter3.next();
+				String name3 = fn.getName();
+				if (!name3.startsWith("outlined$pactail$")) continue;
+				int slotIdx = name3.indexOf(SLOT_MARKER);
+				if (slotIdx < 0) continue;
+				// The slot hex digits follow "slot_" to the end of the name.
+				String slotDigits = name3.substring(slotIdx + SLOT_MARKER.length());
+				String slotHex    = "0x" + slotDigits.toLowerCase();
+				String resolved   = slotMap.get(slotHex);
+				if (resolved == null || resolved.isEmpty()) continue;
+				// Keep everything up to (and including) the "$" before "slot_".
+				// e.g. "outlined$pactail$authstub$slot_ADDR" → "outlined$pactail$authstub$resolved"
+				String prefix   = name3.substring(0, slotIdx);  // "outlined$pactail$authstub$"
+				String newName3 = prefix + sanitizeNameFragment(resolved, 60);
+				if (newName3.equals(name3)) continue;
+				fn.setName(newName3, SourceType.ANALYSIS);
+				pactailSlotUpdated++;
+				if (verbose) {
+					println("[pass3] " + name3 + " → " + newName3);
+				}
+				JsonObject rec = new JsonObject();
+				rec.addProperty("old_name", name3);
+				rec.addProperty("new_name", newName3);
+				rec.addProperty("category", "pactail$authstub$pass3");
+				rec.addProperty("entry", fn.getEntryPoint().toString());
+				rec.addProperty("body_size", fn.getBody().getNumAddresses());
+				rec.addProperty("instruction_count", 0);
+				rec.addProperty("marked_inline", false);
+				renames.add(rec);
+			}
+			if (pactailSlotUpdated > 0) {
+				println("ResolveSwiftOutlined: pass 3 resolved " + pactailSlotUpdated
+						+ " pactail slot addresses via dyld backing.");
+			}
+		}
+
 		// Write report
 		JsonObject report = new JsonObject();
 		report.addProperty("program_name", currentProgram.getName());
@@ -499,6 +548,7 @@ public class ResolveSwiftOutlined extends GhidraScript {
 		report.addProperty("inlined", inlined);
 		report.addProperty("skipped_stubs", skipped);
 		report.addProperty("pactail_updated_pass2", pactailUpdated);
+		report.addProperty("pactail_slot_resolved_pass3", pactailSlotUpdated);
 		JsonObject cats = new JsonObject();
 		for (Map.Entry<String, Integer> e : categoryCounts.entrySet()) {
 			cats.addProperty(e.getKey(), e.getValue());
@@ -687,6 +737,39 @@ public class ResolveSwiftOutlined extends GhidraScript {
 					+ " authstub name mappings from " + path);
 		} catch (Exception e) {
 			printerr("ResolveSwiftOutlined: failed to load authstub map from "
+					+ path + ": " + e.getMessage());
+		}
+		return map;
+	}
+
+	/**
+	 * Load the "slots" section from authstub_map.json (dyld backing for pactail resolution).
+	 * Returns a map from lowercase hex GOT slot address (e.g. "0x299e44d08") to
+	 * the sanitized Ghidra-safe symbol name (e.g. "swift_retain").
+	 * Pactail functions named outlined$pactail$authstub$slot_ADDR use this to recover
+	 * the real callee name from the embedded GOT slot address.
+	 */
+	private Map<String, String> loadSlotMap(String path) {
+		Map<String, String> map = new LinkedHashMap<>();
+		try {
+			Gson gson = new Gson();
+			try (Reader r = new FileReader(path)) {
+				JsonObject root = gson.fromJson(r, JsonObject.class);
+				JsonObject slots = root == null ? null : root.getAsJsonObject("slots");
+				if (slots != null) {
+					for (Map.Entry<String, JsonElement> e : slots.entrySet()) {
+						JsonObject entry = e.getValue().getAsJsonObject();
+						JsonElement nameEl = entry.get("name");
+						if (nameEl != null) {
+							map.put(e.getKey().toLowerCase(), nameEl.getAsString());
+						}
+					}
+				}
+			}
+			println("ResolveSwiftOutlined: loaded " + map.size()
+					+ " slot (dyld backing) mappings from " + path);
+		} catch (Exception e) {
+			printerr("ResolveSwiftOutlined: failed to load slot map from "
 					+ path + ": " + e.getMessage());
 		}
 		return map;

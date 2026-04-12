@@ -93,7 +93,7 @@ done < <(ghidra_re_optional_headless_args)
 java_script_args=()
 build_authstub_map_flag=0
 cache_path_override=""
-for extra in "${extra_script_args[@]}"; do
+for extra in "${extra_script_args[@]+"${extra_script_args[@]}"}"; do
   case "$extra" in
     build_authstub_map=true)  build_authstub_map_flag=1 ;;
     cache_path=*)             cache_path_override="${extra#cache_path=}" ;;
@@ -148,7 +148,7 @@ fi
 cmd+=(-postScript ResolveSwiftOutlined.java)
 # Pass each extra arg as a separate script argument
 cmd+=("output_dir=${export_dir}")
-for extra in "${java_script_args[@]}"; do
+for extra in "${java_script_args[@]+"${java_script_args[@]}"}"; do
   cmd+=("$extra")
 done
 cmd+=(
@@ -188,7 +188,7 @@ if [[ "$use_readonly" -eq 1 ]]; then
   # Check if dry_run was set (check java_script_args; build_authstub_map/cache_path
   # were already stripped out and never affect dry_run semantics)
   dry_run_flag=0
-  for extra in "${java_script_args[@]}"; do
+  for extra in "${java_script_args[@]+"${java_script_args[@]}"}"; do
     [[ "$extra" == "dry_run=true" ]] && dry_run_flag=1
   done
 
