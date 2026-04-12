@@ -220,7 +220,13 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
 - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
 - `scripts/ghidra_resolve_swift_outlined <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true] [scan_fun_stubs=true] [second_pass=true] [verbose=true] [build_authstub_map=true] [cache_path=<path>]`
-- `scripts/ghidra_build_authstub_map <project_name> <program_name>`  — build/refresh `authstub_map.json` from the live dyld shared cache (run separately or via `build_authstub_map=true`)
+- `scripts/ghidra_build_authstub_map <project_name> <program_name>`  — build/refresh `authstub_map.json` from the live dyld shared cache
+- `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]`  — static symbol inventory via LLDB (ObjC methods, trampolines, etc.)
+- `scripts/ghidra_lldb_trace <project_name> <program_name> launch_cmd=<bin> symbols=<syms> [max_hits=100] [timeout=30] [capture_args=true] [capture_backtrace=false]`  — runtime breakpoint trace, captures arg registers and backtraces
+11b. For runtime analysis of binaries you can launch or attach to, use the LLDB integration tools:
+   - `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]` — extract the full symbol table (ObjC methods, trampolines, data symbols) from a Mach-O binary in 0.7 s using LLDB's static module loading. No process needed. Outputs `lldb_symbols.json`.
+   - `scripts/ghidra_lldb_trace <project_name> <program_name> launch_cmd=<binary> symbols=<sym1,sym2> [max_hits=100] [timeout=30] [capture_args=true] [capture_backtrace=false]` — run a binary under LLDB with breakpoints, capturing argument registers (x0-x7) and optional backtraces at each hit. Outputs `lldb_trace_<timestamp>.json`.
+   - LLDB trace works on any binary you compile or own. For system framework analysis, compile a Swift/ObjC test harness that exercises the code path of interest.
 - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
 - `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
 - `scripts/ghidra_objc_surface_report <project_name> <program_name> [format=json|markdown]`

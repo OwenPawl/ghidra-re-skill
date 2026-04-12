@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+#
+# ghidra_lldb_trace
+#
+# Attaches LLDB to a running process (or launches one) and traces function
+# calls at specified addresses or symbol names, capturing argument registers,
+# return values, and backtraces.  Designed for agent-driven runtime analysis
+# of binaries and Apple frameworks that you own or launch.
+#
+# Architecture:
+#   1. Writes a Python breakpoint handler module to a temp file.
+#   2. Generates an LLDB batch command script that imports the module,
+#      sets breakpoints, runs the process, then emits structured JSON.
+#   3. Runs lldb --batch --no-lldbinit and parses the output.
+#
+# Constraints:
+#   • Requires Xcode LLDB (ships with developer tools).
+#   • On macOS with SIP, you can only attach to processes you launch yourself
+#     or processes that have the get-task-allow entitlement.
+#   • dyld shared cache symbols (malloc, free, etc.) will appear as
+#     "unresolved" when traced via a binary that doesn't have debug info —
+#     trace ObjC methods or Swift functions from locally compiled binaries
+#     for best results.
+#   • Breakpoints on symbols in dyld-extracted binaries work when the binary
+#     has DWARF debug symbols or if the full file address is specified.
+#
+# Usage:
+#   ghidra_lldb_trace <project_name> <program_name> <key=value ...>
+#
+# Key=value arguments:
+#   launch_cmd=<path> [<args>]  Launch this binary under LLDB.
+#   attach_pid=<pid>            Attach to a running process by PID.
+#   attach_name=<name>          Attach (waiting) to a process by name.
+#   symbols=<sym1,sym2,...>     Symbol names to trace (resolved at load time).
+#   addresses=<0x1,0x2,...>     File addresses to trace (e.g., from Ghidra export).
+#   max_hits=<N>                Stop after N total breakpoint hits (default: 100).
+#   timeout=<N>                 Abort after N seconds of inactivity (default: 30).
+#   capture_args=true           Capture x0-x7 ARM64 integer registers (default: true).
+#   capture_backtrace=true      Capture call stack at each hit (default: false).
+#   output=<path>               Override output JSON path.
+#
+# Output:
+#   <exports>/<project_name>/<program_name>/lldb_trace_<timestamp>.json
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  sed -n '3,59p' "$0"
+}
+
+[[ $# -ge 2 ]] || { usage >&2; exit 1; }
+
+project_name="$1"
+program_name="$2"
+shift 2
+
+ghidra_re_require_tools
+ghidra_re_export_env
+
+# Parse key=value args
+launch_cmd=""
+attach_pid=""
+attach_name=""
+symbols=""
+addresses=""
+max_hits="100"
+timeout_s="30"
+capture_args="true"
+capture_backtrace="false"
+output_override=""
+
+for arg in "$@"; do
+  case "$arg" in
+    launch_cmd=*)        launch_cmd="${arg#launch_cmd=}" ;;
+    attach_pid=*)        attach_pid="${arg#attach_pid=}" ;;
+    attach_name=*)       attach_name="${arg#attach_name=}" ;;
+    symbols=*)           symbols="${arg#symbols=}" ;;
+    addresses=*)         addresses="${arg#addresses=}" ;;
+    max_hits=*)          max_hits="${arg#max_hits=}" ;;
+    timeout=*)           timeout_s="${arg#timeout=}" ;;
+    capture_args=*)      capture_args="${arg#capture_args=}" ;;
+    capture_backtrace=*) capture_backtrace="${arg#capture_backtrace=}" ;;
+    output=*)            output_override="${arg#output=}" ;;
+    *) printf 'ghidra-re: warning: unknown argument: %s\n' "$arg" >&2 ;;
+  esac
+done
+
+[[ -n "$launch_cmd" || -n "$attach_pid" || -n "$attach_name" ]] || \
+  ghidra_re_die "one of launch_cmd=, attach_pid=, or attach_name= is required"
+
+[[ -n "$symbols" || -n "$addresses" ]] || \
+  ghidra_re_die "at least one of symbols= or addresses= is required"
+
+lldb_py="$(lldb --python-path 2>/dev/null)" || \
+  ghidra_re_die "lldb not found — install Xcode"
+
+export_dir="$(ghidra_re_export_dir "$project_name" "$program_name")"
+mkdir -p "$export_dir"
+
+timestamp="$(ghidra_re_timestamp)"
+output_file="${output_override:-$export_dir/lldb_trace_${timestamp}.json}"
+
+# Temp files — unique names avoid module import clashes between runs
+run_id="$(printf '%s' "$$_${RANDOM}" | tr -dc 'a-z0-9' | head -c 12 || true)"
+handler_module="ghidra_lldb_h_${run_id}"
+handler_py="$(mktemp "/tmp/${handler_module}_XXXXXX.py")"
+# LLDB imports the module as the filename without .py - rename to match
+handler_py_actual="/tmp/${handler_module}.py"
+mv "$handler_py" "$handler_py_actual"
+lldb_script="$(mktemp /tmp/ghidra_lldb_trace_XXXXXX.lldb)"
+lldb_out="$(mktemp /tmp/ghidra_lldb_out_XXXXXX.txt)"
+parse_script="$(mktemp /tmp/ghidra_lldb_parse_XXXXXX.py)"
+
+cleanup() {
+  rm -f "$handler_py_actual" "$lldb_script" "$lldb_out" "$parse_script"
+}
+trap cleanup EXIT
+
+printf 'ghidra-re: LLDB trace for %s/%s\n' "$project_name" "$program_name"
+printf '  Symbols:   %s\n' "${symbols:-<none>}"
+printf '  Addresses: %s\n' "${addresses:-<none>}"
+printf '  Max hits:  %s  Timeout: %ss\n' "$max_hits" "$timeout_s"
+
+# ── Write the Python handler module ──────────────────────────────────────────
+cat > "$handler_py_actual" << HANDLER_EOF
+import lldb, json, sys
+_hits = []
+_max_hits = ${max_hits}
+
+def ghidra_bp_handler(frame, bp_loc, internal_dict):
+    global _hits
+    sym  = frame.GetSymbol()
+    rec  = {
+        "hit_index": len(_hits),
+        "pc":        hex(frame.GetPC()),
+        "symbol":    sym.GetName() if sym.IsValid() else None,
+    }
+HANDLER_EOF
+
+if [[ "$capture_args" == "true" ]]; then
+  cat >> "$handler_py_actual" << 'HANDLER_ARGS_EOF'
+    regs = {}
+    for rs in frame.GetRegisters():
+        for r in rs:
+            n = r.GetName()
+            if n and n.startswith("x") and n[1:].isdigit() and int(n[1:]) < 8:
+                regs[n] = r.GetValue()
+    rec["args"] = regs
+HANDLER_ARGS_EOF
+fi
+
+if [[ "$capture_backtrace" == "true" ]]; then
+  cat >> "$handler_py_actual" << 'HANDLER_BT_EOF'
+    bt = []
+    for i in range(min(frame.GetThread().GetNumFrames(), 16)):
+        f  = frame.GetThread().GetFrameAtIndex(i)
+        s  = f.GetSymbol()
+        bt.append({"frame": i, "pc": hex(f.GetPC()),
+                   "symbol": s.GetName() if s.IsValid() else None})
+    rec["backtrace"] = bt
+HANDLER_BT_EOF
+fi
+
+cat >> "$handler_py_actual" << HANDLER_END_EOF
+    _hits.append(rec)
+    if len(_hits) >= _max_hits:
+        frame.GetThread().GetProcess().Stop()
+        return True   # stop here
+    return False      # continue automatically
+HANDLER_END_EOF
+
+# ── Write the LLDB batch command script ──────────────────────────────────────
+{
+  # Target setup
+  if [[ -n "$launch_cmd" ]]; then
+    launch_bin="${launch_cmd%% *}"
+    launch_args="${launch_cmd#"$launch_bin"}"
+    printf 'target create "%s"\n' "$launch_bin"
+    if [[ -n "${launch_args# }" ]]; then
+      printf 'settings set target.run-args%s\n' "$launch_args"
+    fi
+  elif [[ -n "$attach_pid" ]]; then
+    printf 'target create ""\n'
+    printf 'attach -p %s\n' "$attach_pid"
+  elif [[ -n "$attach_name" ]]; then
+    printf 'target create ""\n'
+    printf 'attach -n "%s" --waitfor\n' "$attach_name"
+  fi
+
+  # Import handler and set breakpoints
+  printf 'command script import "%s"\n' "$handler_py_actual"
+
+  # Symbol breakpoints
+  IFS=',' read -ra sym_arr <<< "${symbols:-}"
+  for sym in "${sym_arr[@]+"${sym_arr[@]}"}"; do
+    sym="${sym// /}"
+    [[ -z "$sym" ]] && continue
+    printf 'breakpoint set --name "%s"\n' "$sym"
+  done
+
+  # Address breakpoints
+  IFS=',' read -ra addr_arr <<< "${addresses:-}"
+  for addr in "${addr_arr[@]+"${addr_arr[@]}"}"; do
+    addr="${addr// /}"
+    [[ -z "$addr" ]] && continue
+    printf 'breakpoint set --address %s\n' "$addr"
+  done
+
+  # Attach all breakpoints to our Python handler (one command per breakpoint)
+  # LLDB uses 1-based breakpoint numbering; we don't know how many there are,
+  # so we use a regex-match for 'breakpoint command add' on all breakpoints.
+  printf 'breakpoint command add --python-function %s.ghidra_bp_handler\n' \
+    "$handler_module"
+
+  # Launch or continue
+  if [[ -n "$launch_cmd" ]]; then
+    printf 'run\n'
+  else
+    printf 'continue\n'
+  fi
+
+  # Emit results — single-line python to avoid blank-line termination
+  printf 'script\n'
+  printf 'import json as _j, %s as _m, lldb as _l; _t = _l.debugger.GetSelectedTarget(); _bps = [{"id": _t.GetBreakpointAtIndex(_i).GetID(), "locs": _t.GetBreakpointAtIndex(_i).GetNumLocations(), "hits": _t.GetBreakpointAtIndex(_i).GetHitCount()} for _i in range(_t.GetNumBreakpoints())]; print("GHIDRA_TRACE_BEGIN"); print(_j.dumps({"hits": _m._hits, "breakpoints": _bps})); print("GHIDRA_TRACE_END")\n' \
+    "$handler_module"
+  printf '\n'
+
+  printf 'quit\n'
+} > "$lldb_script"
+
+# ── Run LLDB ──────────────────────────────────────────────────────────────────
+lldb --no-lldbinit --batch -s "$lldb_script" > "$lldb_out" 2>/dev/null || true
+
+# ── Parse output ──────────────────────────────────────────────────────────────
+cat > "$parse_script" << 'PARSE_EOF'
+import sys, json, os, re
+
+raw_file    = sys.argv[1]
+output_file = sys.argv[2]
+project     = sys.argv[3]
+program     = sys.argv[4]
+symbols_str = sys.argv[5]
+addrs_str   = sys.argv[6]
+max_hits    = int(sys.argv[7])
+timeout_s   = float(sys.argv[8])
+timestamp   = sys.argv[9]
+
+with open(raw_file) as f:
+    raw = f.read()
+
+m = re.search(r'GHIDRA_TRACE_BEGIN\s*\n(.*?)\nGHIDRA_TRACE_END', raw, re.DOTALL)
+if not m:
+    result = {
+        "ok":               True,
+        "warning":          "GHIDRA_TRACE_BEGIN marker not found in LLDB output",
+        "raw_tail":         raw[-2000:],
+        "hits":             [],
+        "breakpoints":      [],
+    }
+else:
+    try:
+        trace_data = json.loads(m.group(1).strip())
+    except json.JSONDecodeError as e:
+        trace_data = {"hits": [], "breakpoints": [], "parse_error": str(e)}
+    result = {"ok": True}
+    result.update(trace_data)
+
+result.update({
+    "project":             project,
+    "program":             program,
+    "symbols_requested":   [s.strip() for s in symbols_str.split(",") if s.strip()],
+    "addresses_requested": [a.strip() for a in addrs_str.split(",") if a.strip()],
+    "max_hits":            max_hits,
+    "timeout_s":           timeout_s,
+    "timestamp":           timestamp,
+    "hit_count":           len(result.get("hits", [])),
+})
+
+out_dir = os.path.dirname(output_file)
+if out_dir:
+    os.makedirs(out_dir, exist_ok=True)
+with open(output_file, 'w') as f:
+    json.dump(result, f, indent=2)
+
+hits      = result.get("hits", [])
+bps       = result.get("breakpoints", [])
+bps_hit   = sum(1 for b in bps if b.get("hits", 0) > 0)
+bps_total = len(bps)
+
+print(json.dumps({
+    "ok":          True,
+    "hit_count":   len(hits),
+    "bps_total":   bps_total,
+    "bps_hit":     bps_hit,
+    "warning":     result.get("warning"),
+    "output_file": output_file,
+}))
+PARSE_EOF
+
+result_json=$(python3 "$parse_script" \
+  "$lldb_out" "$output_file" \
+  "$project_name" "$program_name" \
+  "${symbols:-}" "${addresses:-}" \
+  "$max_hits" "$timeout_s" "$timestamp")
+
+ok=$(printf '%s' "$result_json" | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(d.get('ok', False))" \
+  2>/dev/null || echo "False")
+if [[ "$ok" != "True" ]]; then
+  ghidra_re_die "LLDB trace failed: $result_json"
+fi
+
+printf '%s' "$result_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('\nLLDB trace complete')
+print(f\"  Breakpoints: {d['bps_total']} set, {d['bps_hit']} fired\")
+print(f\"  Total hits:  {d['hit_count']}\")
+if d.get('warning'):
+    print(f\"  Warning: {d['warning']}\")
+print(f\"\n  Output: {d['output_file']}\")
+"
+
+echo "$output_file"
