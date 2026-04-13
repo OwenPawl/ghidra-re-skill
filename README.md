@@ -1,8 +1,20 @@
 # ghidra-re
 
+> **Works with both [OpenAI Codex](https://openai.com/codex) and [Anthropic Claude Code](https://claude.ai/code) — install once, use with either.**
+
+![Claude Code](https://img.shields.io/badge/Claude%20Code-skill-orange?logo=anthropic)
+![OpenAI Codex](https://img.shields.io/badge/OpenAI%20Codex-skill-412991?logo=openai)
+![macOS](https://img.shields.io/badge/macOS-arm64-black?logo=apple)
+![Windows](https://img.shields.io/badge/Windows-x86__64-blue?logo=windows)
+
 `ghidra-re` is a local skill for Ghidra-based reverse engineering on macOS and Windows, with a workflow tuned for Apple Mach-O binaries, dyld-extracted frameworks, multi-target investigation missions, and a live Ghidra bridge for iterative RE sessions.
 
-It is **dual-host**: the same checkout installs as either an **OpenAI Codex** skill (`~/.codex/skills/ghidra-re`) or an **Anthropic Claude Code** skill (`~/.claude/skills/ghidra-re`), or both at the same time. A single unified backend in `scripts/` and `powershell/` is reused across hosts — there is no host-specific fork of any script. See [`scripts/lib/skill_host.sh`](./scripts/lib/skill_host.sh) for the unified host-resolution layer.
+**Dual-host by design.** The same checkout installs as either an **OpenAI Codex** skill (`~/.codex/skills/ghidra-re`) or an **Anthropic Claude Code** skill (`~/.claude/skills/ghidra-re`), or both simultaneously. A single unified backend in `scripts/` and `powershell/` is shared across hosts — there is no host-specific fork of any script. See [`scripts/lib/skill_host.sh`](./scripts/lib/skill_host.sh) for the unified host-resolution layer.
+
+| Host | Install path | Reads |
+|------|-------------|-------|
+| **Claude Code** (Anthropic) | `~/.claude/skills/ghidra-re` | `SKILL.md` frontmatter |
+| **Codex** (OpenAI) | `~/.codex/skills/ghidra-re` | `SKILL.md` + `agents/openai.yaml` |
 
 ## What it includes
 
