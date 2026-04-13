@@ -20,7 +20,7 @@ The skill currently covers discover + understand well, observe partially (LLDB c
 |---|------|--------|-------|
 | 0.1 | Fix `capture_objc_class` in `ghidra_lldb_trace` — isa memory read | ✅ Built, ❌ Not validated | Handler rewrote, never got clean run. Next shortcut trace should confirm. |
 | 0.2 | Validate `capture_objc_class` gives correct class names on BSR | ⬜ Pending | Run "Shift Coverage", confirm hits include `objc_isa` field |
-| 0.3 | Document `attach_name` + shortcut-trigger timing recipe in SKILL.md | ⬜ Pending | Prevent future "Running was cancelled" confusion |
+| 0.3 | Document `attach_name` + shortcut-trigger timing recipe in SKILL.md | ✅ Built | SKILL.md now warns that timeout starts before `--waitfor` attach completes; start trace first and trigger quickly. |
 
 ---
 
@@ -32,6 +32,7 @@ The skill currently covers discover + understand well, observe partially (LLDB c
 ### 1.1 — ObjC class name from isa (Phase 0.1 dependency)
 - Approach: memory read isa pointer at x0, mask PAC bits (`& 0x0000007fffffffff`), resolve against `ghidra_build_isa_map` output
 - Needed first: `ghidra_build_isa_map` (Phase 1.2)
+- Status: ✅ Implemented in `ghidra_lldb_trace`; live validation still pending via Phase 0.2
 
 ### 1.2 — `ghidra_build_isa_map`
 - **New script** (shell + Python)
@@ -47,6 +48,7 @@ The skill currently covers discover + understand well, observe partially (LLDB c
 - Also captures x1 (selector string pointer → read cstring) for ObjC calls
 - Optional: read `-description` output via `object_getClassName` (already attempted — use memory read path instead)
 - Outputs per-hit: `{ "self_class": "WFCalculateExpressionAction", "selector": "runWithInput:error:", ... }`
+- Status: ✅ Implemented; waiting on a real ObjC trace to confirm hit quality
 
 ### 1.4 — Object field dumper (stretch)
 - For known WFAction subclasses, read ivar offsets from ObjC runtime layout in binary
@@ -217,7 +219,7 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 
 | Script | Action | Phase |
 |--------|--------|-------|
-| `ghidra_lldb_trace` | Modify — fix `capture_objc_class`, add `capture_objc_args` | 0, 1 |
+| `ghidra_lldb_trace` | ✅ Built for `capture_objc_class` + `capture_objc_args`; ⬜ live validation pending | 0, 1 |
 | `ghidra_build_isa_map` | ✅ Built, ⬜ Runtime-consumer integration pending | 1.2 |
 | `ghidra_lldb_enrich` | **New** shell + Python | 2 |
 | `ghidra_scripts/ClassifySmallFunctions.java` | **New** Java | 3.2 |
@@ -234,8 +236,8 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 
 ## Current status
 
-- **Active:** Phase 0 validation + Phase 1 LLDB data-shape integration
-- **Next:** Phase 1.1 + 1.3 — consume `isa_map.json` inside `ghidra_lldb_trace` for resolved `self_class` / selector capture
+- **Active:** Phase 0 live validation
+- **Next:** Validate `capture_objc_class` / `capture_objc_args` on BSR and confirm `self_class` + `selector` fields are present in trace hits
 - **Blocked:** nothing currently
 
 ---
