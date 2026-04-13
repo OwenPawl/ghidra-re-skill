@@ -37,6 +37,7 @@
 #   timeout=<N>                 Abort after N seconds of inactivity (default: 30).
 #   capture_args=true           Capture x0-x7 ARM64 integer registers (default: true).
 #   capture_backtrace=true      Capture call stack at each hit (default: false).
+#   capture_objc_class=true     Call object_getClassName(x0) to record ObjC self class (default: false).
 #   output=<path>               Override output JSON path.
 #
 # Output:
@@ -70,20 +71,22 @@ max_hits="100"
 timeout_s="30"
 capture_args="true"
 capture_backtrace="false"
+capture_objc_class="false"
 output_override=""
 
 for arg in "$@"; do
   case "$arg" in
-    launch_cmd=*)        launch_cmd="${arg#launch_cmd=}" ;;
-    attach_pid=*)        attach_pid="${arg#attach_pid=}" ;;
-    attach_name=*)       attach_name="${arg#attach_name=}" ;;
-    symbols=*)           symbols="${arg#symbols=}" ;;
-    addresses=*)         addresses="${arg#addresses=}" ;;
-    max_hits=*)          max_hits="${arg#max_hits=}" ;;
-    timeout=*)           timeout_s="${arg#timeout=}" ;;
-    capture_args=*)      capture_args="${arg#capture_args=}" ;;
-    capture_backtrace=*) capture_backtrace="${arg#capture_backtrace=}" ;;
-    output=*)            output_override="${arg#output=}" ;;
+    launch_cmd=*)          launch_cmd="${arg#launch_cmd=}" ;;
+    attach_pid=*)          attach_pid="${arg#attach_pid=}" ;;
+    attach_name=*)         attach_name="${arg#attach_name=}" ;;
+    symbols=*)             symbols="${arg#symbols=}" ;;
+    addresses=*)           addresses="${arg#addresses=}" ;;
+    max_hits=*)            max_hits="${arg#max_hits=}" ;;
+    timeout=*)             timeout_s="${arg#timeout=}" ;;
+    capture_args=*)        capture_args="${arg#capture_args=}" ;;
+    capture_backtrace=*)   capture_backtrace="${arg#capture_backtrace=}" ;;
+    capture_objc_class=*)  capture_objc_class="${arg#capture_objc_class=}" ;;
+    output=*)              output_override="${arg#output=}" ;;
     *) printf 'ghidra-re: warning: unknown argument: %s\n' "$arg" >&2 ;;
   esac
 done
@@ -110,9 +113,9 @@ handler_py="$(mktemp "/tmp/${handler_module}_XXXXXX.py")"
 # LLDB imports the module as the filename without .py - rename to match
 handler_py_actual="/tmp/${handler_module}.py"
 mv "$handler_py" "$handler_py_actual"
-lldb_script="$(mktemp /tmp/ghidra_lldb_trace_XXXXXX.lldb)"
-lldb_out="$(mktemp /tmp/ghidra_lldb_out_XXXXXX.txt)"
-parse_script="$(mktemp /tmp/ghidra_lldb_parse_XXXXXX.py)"
+lldb_script="$(mktemp "/tmp/ghidra_lldb_trace_${run_id}_XXXXXX.lldb")"
+lldb_out="$(mktemp "/tmp/ghidra_lldb_out_${run_id}_XXXXXX.txt")"
+parse_script="$(mktemp "/tmp/ghidra_lldb_parse_${run_id}_XXXXXX.py")"
 
 cleanup() {
   rm -f "$handler_py_actual" "$lldb_script" "$lldb_out" "$parse_script"
@@ -125,52 +128,90 @@ printf '  Addresses: %s\n' "${addresses:-<none>}"
 printf '  Max hits:  %s  Timeout: %ss\n' "$max_hits" "$timeout_s"
 
 # ── Write the Python handler module ──────────────────────────────────────────
-cat > "$handler_py_actual" << HANDLER_EOF
-import lldb, json, sys
+# Build the handler as a Python file with all optional sections at correct indent level (4 spaces = inside function).
+{
+cat << HANDLER_HEADER
+import lldb, json, sys, os
 _hits = []
 _max_hits = ${max_hits}
+_hits_file = "${lldb_out}.hits.json"   # flush hits here so timeout-kill doesn't lose them
+
+def _flush_hits():
+    try:
+        with open(_hits_file, 'w') as _f:
+            json.dump(_hits, _f)
+    except Exception:
+        pass
 
 def ghidra_bp_handler(frame, bp_loc, internal_dict):
     global _hits
-    sym  = frame.GetSymbol()
-    rec  = {
-        "hit_index": len(_hits),
-        "pc":        hex(frame.GetPC()),
-        "symbol":    sym.GetName() if sym.IsValid() else None,
-    }
-HANDLER_EOF
+    try:
+        sym  = frame.GetSymbol()
+        rec  = {
+            "hit_index": len(_hits),
+            "pc":        hex(frame.GetPC()),
+            "symbol":    sym.GetName() if sym.IsValid() else None,
+        }
+HANDLER_HEADER
 
 if [[ "$capture_args" == "true" ]]; then
-  cat >> "$handler_py_actual" << 'HANDLER_ARGS_EOF'
-    regs = {}
-    for rs in frame.GetRegisters():
-        for r in rs:
-            n = r.GetName()
-            if n and n.startswith("x") and n[1:].isdigit() and int(n[1:]) < 8:
-                regs[n] = r.GetValue()
-    rec["args"] = regs
-HANDLER_ARGS_EOF
+cat << 'HANDLER_ARGS'
+        regs = {}
+        for rs in frame.GetRegisters():
+            for r in rs:
+                n = r.GetName()
+                if n and n.startswith("x") and n[1:].isdigit() and int(n[1:]) < 8:
+                    regs[n] = r.GetValue()
+        rec["args"] = regs
+HANDLER_ARGS
 fi
 
 if [[ "$capture_backtrace" == "true" ]]; then
-  cat >> "$handler_py_actual" << 'HANDLER_BT_EOF'
-    bt = []
-    for i in range(min(frame.GetThread().GetNumFrames(), 16)):
-        f  = frame.GetThread().GetFrameAtIndex(i)
-        s  = f.GetSymbol()
-        bt.append({"frame": i, "pc": hex(f.GetPC()),
-                   "symbol": s.GetName() if s.IsValid() else None})
-    rec["backtrace"] = bt
-HANDLER_BT_EOF
+cat << 'HANDLER_BT'
+        bt = []
+        for i in range(min(frame.GetThread().GetNumFrames(), 16)):
+            f  = frame.GetThread().GetFrameAtIndex(i)
+            s  = f.GetSymbol()
+            bt.append({"frame": i, "pc": hex(f.GetPC()),
+                       "symbol": s.GetName() if s.IsValid() else None})
+        rec["backtrace"] = bt
+HANDLER_BT
 fi
 
-cat >> "$handler_py_actual" << HANDLER_END_EOF
-    _hits.append(rec)
-    if len(_hits) >= _max_hits:
-        frame.GetThread().GetProcess().Stop()
-        return True   # stop here
-    return False      # continue automatically
-HANDLER_END_EOF
+if [[ "$capture_objc_class" == "true" ]]; then
+cat << 'HANDLER_CLS'
+        try:
+            _proc = frame.GetThread().GetProcess()
+            _x0_val = None
+            for _rs in frame.GetRegisters():
+                for _r in _rs:
+                    if _r.GetName() == "x0":
+                        _x0_val = _r.GetValueAsUnsigned()
+                        break
+                if _x0_val is not None:
+                    break
+            if _x0_val:
+                _err = lldb.SBError()
+                _isa_raw = _proc.ReadPointerFromMemory(_x0_val, _err)
+                if _err.Success():
+                    _isa = _isa_raw & 0x0000007fffffffff  # strip arm64e PAC bits
+                    rec["objc_isa"] = hex(_isa)
+        except Exception as _e:
+            rec["objc_isa"] = f"err:{_e}"
+HANDLER_CLS
+fi
+
+cat << 'HANDLER_TAIL'
+        _hits.append(rec)
+        _flush_hits()   # persist every hit so timeout-kill doesn't lose data
+        if len(_hits) >= _max_hits:
+            frame.GetThread().GetProcess().Stop()
+            return True   # stop here
+        return False      # continue automatically
+    except Exception:
+        return False      # never let the handler crash
+HANDLER_TAIL
+} > "$handler_py_actual"
 
 # ── Write the LLDB batch command script ──────────────────────────────────────
 {
@@ -196,7 +237,9 @@ HANDLER_END_EOF
   # Symbol breakpoints
   IFS=',' read -ra sym_arr <<< "${symbols:-}"
   for sym in "${sym_arr[@]+"${sym_arr[@]}"}"; do
-    sym="${sym// /}"
+    # Trim only leading/trailing whitespace (not internal spaces — ObjC selectors need them)
+    sym="${sym#"${sym%%[![:space:]]*}"}"
+    sym="${sym%"${sym##*[![:space:]]}"}"
     [[ -z "$sym" ]] && continue
     printf 'breakpoint set --name "%s"\n' "$sym"
   done
@@ -204,7 +247,9 @@ HANDLER_END_EOF
   # Address breakpoints
   IFS=',' read -ra addr_arr <<< "${addresses:-}"
   for addr in "${addr_arr[@]+"${addr_arr[@]}"}"; do
-    addr="${addr// /}"
+    # Trim leading/trailing whitespace only
+    addr="${addr#"${addr%%[![:space:]]*}"}"
+    addr="${addr%"${addr##*[![:space:]]}"}"
     [[ -z "$addr" ]] && continue
     printf 'breakpoint set --address %s\n' "$addr"
   done
@@ -231,8 +276,15 @@ HANDLER_END_EOF
   printf 'quit\n'
 } > "$lldb_script"
 
-# ── Run LLDB ──────────────────────────────────────────────────────────────────
-lldb --no-lldbinit --batch -s "$lldb_script" > "$lldb_out" 2>/dev/null || true
+# ── Run LLDB (with hard wall-clock timeout) ───────────────────────────────────
+# macOS ships without GNU coreutils `timeout`, so use a background-killer pattern.
+# The handler flushes hits to a sidecar file on every hit, so SIGTERM-kill is safe.
+lldb --no-lldbinit --batch -s "$lldb_script" > "$lldb_out" 2>/dev/null &
+_lldb_pid=$!
+( sleep "$timeout_s" && kill -TERM "$_lldb_pid" 2>/dev/null ) &
+_killer_pid=$!
+wait "$_lldb_pid" 2>/dev/null || true
+kill "$_killer_pid" 2>/dev/null || true
 
 # ── Parse output ──────────────────────────────────────────────────────────────
 cat > "$parse_script" << 'PARSE_EOF'
@@ -252,21 +304,45 @@ with open(raw_file) as f:
     raw = f.read()
 
 m = re.search(r'GHIDRA_TRACE_BEGIN\s*\n(.*?)\nGHIDRA_TRACE_END', raw, re.DOTALL)
+hits_sidecar = raw_file + ".hits.json"   # written per-hit by handler for timeout-safety
 if not m:
-    result = {
-        "ok":               True,
-        "warning":          "GHIDRA_TRACE_BEGIN marker not found in LLDB output",
-        "raw_tail":         raw[-2000:],
-        "hits":             [],
-        "breakpoints":      [],
-    }
+    # Try to recover hits from the per-hit sidecar written by the handler
+    recovered_hits = []
+    if os.path.exists(hits_sidecar):
+        try:
+            with open(hits_sidecar) as sf:
+                recovered_hits = json.load(sf)
+        except Exception:
+            pass
+    if recovered_hits:
+        result = {
+            "ok":          True,
+            "warning":     "timeout: GHIDRA_TRACE_BEGIN not found but recovered "
+                           + str(len(recovered_hits)) + " hits from sidecar",
+            "hits":        recovered_hits,
+            "breakpoints": [],
+        }
+    else:
+        result = {
+            "ok":          True,
+            "warning":     "GHIDRA_TRACE_BEGIN marker not found in LLDB output",
+            "raw_tail":    raw[-2000:],
+            "hits":        [],
+            "breakpoints": [],
+        }
 else:
     try:
         trace_data = json.loads(m.group(1).strip())
     except json.JSONDecodeError as e:
         trace_data = {"hits": [], "breakpoints": [], "parse_error": str(e)}
+    # Merge sidecar hits if any are missing from the in-memory list (shouldn't happen)
     result = {"ok": True}
     result.update(trace_data)
+# Clean up sidecar
+try:
+    os.unlink(hits_sidecar)
+except Exception:
+    pass
 
 result.update({
     "project":             project,
