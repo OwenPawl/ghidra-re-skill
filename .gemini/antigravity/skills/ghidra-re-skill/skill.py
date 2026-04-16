@@ -1,4 +1,15 @@
-"""Gemini antigravity skill implementation for ghidra-re-skill."""
+"""Gemini antigravity skill implementation for ghidra-re-skill.
+
+Technical notes (see ghidra_re_skill/ package for implementation):
+- Bridge XML patching uses xml.etree.ElementTree — not regex — for robust, idempotent
+  patching of Ghidra tool config files (.tcd / FrontEndTool.xml).
+- The bridge-current.lock directory lock has stale-lock detection: if the lock is older
+  than 30 s (st_mtime), it is removed automatically to prevent hangs after a crash.
+- Windows process liveness check uses PROCESS_QUERY_LIMITED_INFORMATION (0x1000) +
+  GetExitCodeProcess (expected value 259 / STILL_ACTIVE); handle is closed in a finally.
+- Share-package installs use shutil.copytree with an ignore callback; backup paths are
+  removed before move to prevent nesting like ghidra-re.backup-TS/ghidra-re.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +37,18 @@ def run_command(command: str, args: dict[str, Any] | None = None) -> Any:
             "config_home": str(cfg.config_home),
             "workspace": str(cfg.workspace),
         }
+
+    if command == "install":
+        from ghidra_re_skill.modules.publisher import install_skill
+        from pathlib import Path
+        installed = install_skill(
+            host=args.get("host", "auto"),
+            source_dir=Path(args["source"]) if args.get("source") else None,
+            run_bootstrap=not args.get("no_bootstrap", False),
+            skip_smoke_test=args.get("skip_smoke_test", False),
+            skip_bridge_install=args.get("skip_bridge_install", False),
+        )
+        return {"installed": [str(p) for p in installed]}
 
     if command == "doctor":
         from ghidra_re_skill.core.ghidra_locator import (

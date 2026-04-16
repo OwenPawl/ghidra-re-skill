@@ -1,14 +1,15 @@
 {
   "name": "ghidra-re-skill",
   "display_name": "Ghidra RE",
-  "version": "0.1.0",
-  "description": "Cross-platform headless Ghidra workflow for Apple RE and bug-hunting triage. Supports import/analyze, bridge sessions, missions, shared notes, and Swift/ObjC surface reports.",
+  "version": "0.1.1",
+  "description": "Cross-platform headless Ghidra workflow for Apple RE and bug-hunting triage. Supports import/analyze, bridge sessions, missions, shared notes, and Swift/ObjC surface reports. Bridge XML patching uses ElementTree (not regex), bridge-current.lock has stale-lock detection (30 s), Windows process checks use PROCESS_QUERY_LIMITED_INFORMATION + GetExitCodeProcess, and share-package installs use shutil.copytree with safe backups.",
   "entry_point": "python -m ghidra_re_skill",
   "install_command": "pip install -e .",
   "requires_python": ">=3.11",
   "commands": {
     "bootstrap": "python -m ghidra_re_skill bootstrap",
     "doctor": "python -m ghidra_re_skill doctor",
+    "install": "python -m ghidra_re_skill install",
     "bridge arm": "python -m ghidra_re_skill bridge arm",
     "bridge disarm": "python -m ghidra_re_skill bridge disarm",
     "bridge call": "python -m ghidra_re_skill bridge call",
@@ -28,8 +29,17 @@
     "notes status": "python -m ghidra_re_skill notes status",
     "import analyze": "python -m ghidra_re_skill import analyze",
     "import macos-framework": "python -m ghidra_re_skill import macos-framework",
-    "import run-script": "python -m ghidra_re_skill import run-script"
+    "import run-script": "python -m ghidra_re_skill import run-script",
+    "publish share": "python -m ghidra_re_skill publish share",
+    "publish mac-desktop": "python -m ghidra_re_skill publish mac-desktop",
+    "publish windows-desktop": "python -m ghidra_re_skill publish windows-desktop"
   },
   "platforms": ["windows", "macos", "linux"],
-  "tags": ["ghidra", "reverse-engineering", "apple", "macos", "binary-analysis"]
+  "tags": ["ghidra", "reverse-engineering", "apple", "macos", "binary-analysis"],
+  "technical_notes": {
+    "bridge_xml_patching": "Uses xml.etree.ElementTree; removes 'Codex Bridge' PACKAGE, adds CodexBridgePlugin to 'Ghidra Core'; skips malformed XML with warning",
+    "stale_lock_detection": "bridge-current.lock expires after 30 s via st_mtime check; prevents hangs after crash",
+    "windows_process_check": "PROCESS_QUERY_LIMITED_INFORMATION (0x1000) + GetExitCodeProcess == 259; handle always closed in finally",
+    "publisher_copytree": "shutil.copytree with ignore= callback; safe backup removes existing backup dir before move"
+  }
 }

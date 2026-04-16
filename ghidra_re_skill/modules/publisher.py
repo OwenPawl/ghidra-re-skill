@@ -27,19 +27,27 @@ _EXCLUDE_NAMES = {".git", ".DS_Store", "__MACOSX", ".gradle", "build", "ghidra_r
 _EXCLUDE_SUFFIXES = {".pyc"}
 
 
+def _ignore_func(directory: str, contents: list[str]) -> set[str]:
+    """shutil.copytree ignore callback: skip build artefacts and VCS dirs."""
+    ignored: set[str] = set()
+    for name in contents:
+        if name in _EXCLUDE_NAMES:
+            ignored.add(name)
+            continue
+        path = Path(directory) / name
+        if path.is_file() and path.suffix in _EXCLUDE_SUFFIXES:
+            ignored.add(name)
+    return ignored
+
+
 def _copy_tree(src: Path, dst: Path) -> None:
-    """Copy a directory tree excluding build artefacts."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        if item.name in _EXCLUDE_NAMES:
-            continue
-        if item.suffix in _EXCLUDE_SUFFIXES:
-            continue
-        target = dst / item.name
-        if item.is_dir():
-            _copy_tree(item, target)
-        else:
-            shutil.copy2(item, target)
+    """Copy *src* to *dst* using shutil.copytree, skipping build artefacts."""
+    shutil.copytree(
+        src,
+        dst,
+        ignore=_ignore_func,
+        dirs_exist_ok=True,
+    )
 
 
 def _zip_dir(source_dir: Path, output_zip: Path) -> None:
@@ -266,14 +274,18 @@ def install_skill(
         raise ValueError(f"unknown host: {host!r} (expected codex | claude | both | auto)")
 
     installed: list[Path] = []
-    ts = timestamp()
+    backup_ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
     for target in targets:
         target_parent = target.parent
         target_parent.mkdir(parents=True, exist_ok=True)
 
         if target.exists():
-            backup = target.parent / f"{target.name}.backup-{ts}"
+            backup = target.parent / f"{target.name}.backup-{backup_ts}"
+            # If the backup path already exists (e.g. two installs in the same
+            # second), remove it first to avoid unintended nesting.
+            if backup.exists():
+                shutil.rmtree(backup)
             shutil.move(str(target), str(backup))
             print(f"install_skill: backed up existing skill to {backup}")
 

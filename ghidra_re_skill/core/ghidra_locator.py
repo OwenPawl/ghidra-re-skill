@@ -150,6 +150,8 @@ def detect_ghidra_dir() -> Path | None:
             return resolved
         # Search one level deep for versioned subdirectories
         try:
+            if not candidate.is_dir():
+                continue
             for sub in sorted(candidate.iterdir()):
                 name_lower = sub.name.lower()
                 if sub.is_dir() and (

@@ -74,9 +74,9 @@ To install: `pip install -e /path/to/ghidra-re-skill`
 18. Use the dyld-aware macOS import helper when a framework path comes from a live system image or extracted source root:
    - `ghidra-re import macos-framework </System/.../Framework.framework/Framework> [--project <name>]`
 19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
-   - `scripts/build_mac_desktop_share_package [output_zip]`
+   - `ghidra-re publish mac-desktop [output_zip]`
 22. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
-   - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
+   - `ghidra-re publish windows-desktop [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 23. On Windows, optionally import the native module after install:
    - `Import-Module GhidraRe`
    - `Get-GhidraReBridgeSessions`
@@ -150,10 +150,11 @@ To install: `pip install -e /path/to/ghidra-re-skill`
 ### 6) Use the live bridge for iterative GUI sessions
 - Prefer the live bridge whenever the target is already open or the task will involve repeated `search -> navigate -> decompile -> refs` loops.
 - Prefer headless exports for wide scans, batch bundles, or cold-start project setup; switch to the bridge once you want a tighter interactive loop.
-- `scripts/bootstrap` installs the bridge extension into the user's Ghidra settings when possible.
+- `ghidra-re bootstrap` installs the bridge extension into the user's Ghidra settings when possible. The installer uses `xml.etree.ElementTree` to safely patch Ghidra tool config files (`.tcd`), removing any old "Codex Bridge" package and adding the plugin to the "Ghidra Core" package — it never mangles XML with regex and skips malformed files gracefully.
 - If Ghidra was already running before the install, restart it once or run `EnableCodexBridge.java` from the GUI Script Manager.
-- The bridge now keeps a real multi-session registry under `~/.config/ghidra-re/bridge-sessions/` and a compatibility pointer at `~/.config/ghidra-re/bridge-current.json`.
-- `scripts/ghidra_bridge_open` and `scripts/ghidra_bridge_arm` write per-request files under `~/.config/ghidra-re/bridge-requests/`, first give an already-running Ghidra session a chance to consume them, and only then launch a detached GUI session if needed.
+- The bridge now keeps a real multi-session registry under `~/.config/ghidra-re/bridge-sessions/` and a compatibility pointer at `~/.config/ghidra-re/bridge-current.json`. The lock used when updating `bridge-current.json` auto-expires stale locks (older than 30 s) to prevent permanent hangs after a crash.
+- On Windows, `check_pid_alive()` uses `PROCESS_QUERY_LIMITED_INFORMATION` + `GetExitCodeProcess` with proper handle cleanup instead of a bare `OpenProcess` flag, reducing false-positive "alive" results after a process exits.
+- `ghidra-re bridge arm` and `ghidra-re bridge call` write per-request files under `~/.config/ghidra-re/bridge-requests/`, first give an already-running Ghidra session a chance to consume them, and only then launch a detached GUI session if needed.
 - Use `scripts/ghidra_bridge_sessions` to list live sessions and `scripts/ghidra_bridge_select` to change the default target.
 - On macOS, detached launches use a hidden `screen` keeper session so Ghidra survives after the launcher command exits and the bridge remains usable across the rest of the Codex session.
 - Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import sys
 import time
@@ -212,9 +211,17 @@ def session_healthy(session_file: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 _LOCK_SUFFIX = "bridge-current.lock"
+_LOCK_STALE_SECONDS = 30
 
 
-def _acquire_lock() -> Path:
+def _acquire_lock(stale_timeout: float = _LOCK_STALE_SECONDS) -> Path:
+    """Acquire the bridge-current directory lock.
+
+    Retries up to ~10 s (200 × 50 ms).  If the lock directory is older
+    than *stale_timeout* seconds it is removed and acquisition retried
+    immediately — this handles the case where a previous process crashed
+    without releasing the lock.
+    """
     lock = cfg.bridge_config_dir / _LOCK_SUFFIX
     ensure_bridge_dirs()
     for _ in range(200):
@@ -222,6 +229,16 @@ def _acquire_lock() -> Path:
             lock.mkdir()
             return lock
         except FileExistsError:
+            # Check for a stale lock (process crashed without releasing).
+            try:
+                age = time.time() - lock.stat().st_mtime
+                if age > stale_timeout:
+                    try:
+                        lock.rmdir()
+                    except Exception:
+                        pass
+            except FileNotFoundError:
+                pass  # Lock was just released; retry immediately.
             time.sleep(0.05)
     raise RuntimeError(f"timed out waiting for bridge-current lock at {lock}")
 
@@ -778,64 +795,129 @@ def install() -> dict:
 
 
 def _patch_tool_xml(path: Path) -> None:
-    xml = path.read_text(encoding="utf-8")
-    original = xml
-    xml = re.sub(
-        r'\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>',
-        "",
-        xml,
-        flags=re.S,
-    )
-    xml = re.sub(r'\n\s*<INCLUDE CLASS="codexghidrabridge\.CodexBridgePlugin" />', "", xml)
-    if path.name == "_code_browser.tcd" and "codexghidrabridge.CodexBridgePlugin" not in xml:
-        replacement = '\n            <INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />'
-        xml, count = re.subn(
-            r'(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)',
-            r"\1" + replacement + r"\2",
-            xml,
-            count=1,
-            flags=re.S,
+    """Patch a Ghidra tool config (.tcd) file using ElementTree.
+
+    - Removes any PACKAGE named "Codex Bridge".
+    - Removes stray top-level INCLUDE elements for codexghidrabridge.CodexBridgePlugin.
+    - For _code_browser.tcd: ensures codexghidrabridge.CodexBridgePlugin is
+      present as an INCLUDE inside the "Ghidra Core" PACKAGE (creating the
+      PACKAGE if it only existed as a self-closing tag).
+    """
+    import xml.etree.ElementTree as ET
+
+    raw = path.read_text(encoding="utf-8")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        # Log and skip malformed XML rather than corrupting the file.
+        import sys
+        print(f"WARNING: skipping malformed XML in {path}: {exc}", file=sys.stderr)
+        return
+
+    _BRIDGE_PKG = "Codex Bridge"
+    _PLUGIN_CLASS = "codexghidrabridge.CodexBridgePlugin"
+    changed = False
+
+    # Walk every PLUGIN_PACKAGE element (or TOOL element that contains them).
+    # Ghidra .tcd files use TOOL > PACKAGE structure.
+    for parent in list(root.iter()):
+        # Remove "Codex Bridge" PACKAGE children
+        for pkg in list(parent):
+            if pkg.tag == "PACKAGE" and pkg.get("NAME") == _BRIDGE_PKG:
+                parent.remove(pkg)
+                changed = True
+            # Remove stray INCLUDE for the plugin at any level
+            if pkg.tag == "INCLUDE" and pkg.get("CLASS") == _PLUGIN_CLASS:
+                parent.remove(pkg)
+                changed = True
+
+    # For _code_browser.tcd only: ensure plugin is inside "Ghidra Core" PACKAGE.
+    if path.name == "_code_browser.tcd":
+        # Check whether the plugin is already present anywhere after cleanup.
+        already_present = any(
+            el.get("CLASS") == _PLUGIN_CLASS
+            for el in root.iter("INCLUDE")
         )
-        if count == 0:
-            xml = re.sub(
-                r'<PACKAGE NAME="Ghidra Core"\s*/>',
-                '<PACKAGE NAME="Ghidra Core">\n            '
-                '<INCLUDE CLASS="codexghidrabridge.CodexBridgePlugin" />\n        </PACKAGE>',
-                xml,
-                count=1,
-            )
-    if xml != original:
-        path.write_text(xml, encoding="utf-8")
+        if not already_present:
+            # Find or create the "Ghidra Core" PACKAGE.
+            ghidra_core_pkg: ET.Element | None = None
+            for pkg in root.iter("PACKAGE"):
+                if pkg.get("NAME") == "Ghidra Core":
+                    ghidra_core_pkg = pkg
+                    break
+
+            if ghidra_core_pkg is None:
+                # Append a new PACKAGE element to root.
+                ghidra_core_pkg = ET.SubElement(root, "PACKAGE")
+                ghidra_core_pkg.set("NAME", "Ghidra Core")
+
+            include_el = ET.SubElement(ghidra_core_pkg, "INCLUDE")
+            include_el.set("CLASS", _PLUGIN_CLASS)
+            changed = True
+
+    if changed:
+        ET.indent(root, space="    ")
+        path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode"),
+            encoding="utf-8",
+        )
 
 
 def _patch_frontend_xml(path: Path) -> None:
-    xml = path.read_text(encoding="utf-8")
-    original = xml
-    xml = re.sub(
-        r'\n\s*<PACKAGE NAME="Codex Bridge">\s*<INCLUDE CLASS="codexghidrabridge\.[^"]+" />\s*</PACKAGE>',
-        "",
-        xml,
-        flags=re.S,
+    """Patch FrontEndTool.xml using ElementTree.
+
+    - Removes any PACKAGE named "Codex Bridge".
+    - Ensures codexghidrabridge.CodexBridgeFrontEndPlugin is present inside
+      the "Ghidra Core" PACKAGE.
+    """
+    import xml.etree.ElementTree as ET
+
+    raw = path.read_text(encoding="utf-8")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        import sys
+        print(f"WARNING: skipping malformed XML in {path}: {exc}", file=sys.stderr)
+        return
+
+    _BRIDGE_PKG = "Codex Bridge"
+    _FRONTEND_CLASS = "codexghidrabridge.CodexBridgeFrontEndPlugin"
+    changed = False
+
+    for parent in list(root.iter()):
+        for pkg in list(parent):
+            if pkg.tag == "PACKAGE" and pkg.get("NAME") == _BRIDGE_PKG:
+                parent.remove(pkg)
+                changed = True
+            if pkg.tag == "INCLUDE" and pkg.get("CLASS") == _FRONTEND_CLASS:
+                parent.remove(pkg)
+                changed = True
+
+    already_present = any(
+        el.get("CLASS") == _FRONTEND_CLASS
+        for el in root.iter("INCLUDE")
     )
-    if "codexghidrabridge.CodexBridgeFrontEndPlugin" not in xml:
-        xml, count = re.subn(
-            r'<PACKAGE NAME="Ghidra Core"\s*/>',
-            '<PACKAGE NAME="Ghidra Core">\n                '
-            '<INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />\n            </PACKAGE>',
-            xml,
-            count=1,
+    if not already_present:
+        ghidra_core_pkg: ET.Element | None = None
+        for pkg in root.iter("PACKAGE"):
+            if pkg.get("NAME") == "Ghidra Core":
+                ghidra_core_pkg = pkg
+                break
+
+        if ghidra_core_pkg is None:
+            ghidra_core_pkg = ET.SubElement(root, "PACKAGE")
+            ghidra_core_pkg.set("NAME", "Ghidra Core")
+
+        include_el = ET.SubElement(ghidra_core_pkg, "INCLUDE")
+        include_el.set("CLASS", _FRONTEND_CLASS)
+        changed = True
+
+    if changed:
+        ET.indent(root, space="    ")
+        path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode"),
+            encoding="utf-8",
         )
-        if count == 0:
-            xml = re.sub(
-                r'(<PACKAGE NAME="Ghidra Core">.*?)(\n\s*</PACKAGE>)',
-                r"\1\n                "
-                r'<INCLUDE CLASS="codexghidrabridge.CodexBridgeFrontEndPlugin" />\2',
-                xml,
-                count=1,
-                flags=re.S,
-            )
-    if xml != original:
-        path.write_text(xml, encoding="utf-8")
 
 
 def _clear_state_files() -> None:
