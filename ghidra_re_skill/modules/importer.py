@@ -124,8 +124,10 @@ def _summarize_import_log(log_file: Path, script_log: Path) -> dict:
                 symbol_length_failures += 1
 
     if script_log.exists():
-        sl_text = script_log.read_text(encoding="utf-8", errors="replace")
-        demangle_failures = sl_text.count("Unable to demangle:")
+        with script_log.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "Unable to demangle:" in line:
+                    demangle_failures += 1
 
     return {
         "unresolved_count": unresolved_count,

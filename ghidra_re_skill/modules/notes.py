@@ -256,8 +256,6 @@ def open_shared() -> None:
 
 
 def _get_skill_version() -> str:
-    import subprocess
-
     skill_root = cfg.skill_root
     if (skill_root / ".git").exists():
         try:
