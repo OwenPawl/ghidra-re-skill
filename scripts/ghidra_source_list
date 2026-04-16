@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
-
-ghidra_re_source_registry_init
-cat "$GHIDRA_RE_SOURCE_REGISTRY_FILE"

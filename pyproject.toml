@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghidra-re-skill"
+version = "0.1.0"
+description = "Cross-platform Python orchestration layer for Ghidra reverse-engineering"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+ghidra-re = "ghidra_re_skill.cli:app"
+ghidra_bridge_arm = "ghidra_re_skill.cli:app"
+ghidra_bridge_disarm = "ghidra_re_skill.cli:app"
+ghidra_bridge_build = "ghidra_re_skill.cli:app"
+ghidra_bridge_install = "ghidra_re_skill.cli:app"
+ghidra_bridge_call = "ghidra_re_skill.cli:app"
+ghidra_bridge_status = "ghidra_re_skill.cli:app"
+ghidra_bridge_sessions = "ghidra_re_skill.cli:app"
+ghidra_mission_start = "ghidra_re_skill.cli:app"
+ghidra_mission_status = "ghidra_re_skill.cli:app"
+ghidra_mission_finish = "ghidra_re_skill.cli:app"
+ghidra_mission_report = "ghidra_re_skill.cli:app"
+ghidra_mission_trace = "ghidra_re_skill.cli:app"
+ghidra_mission_autopilot = "ghidra_re_skill.cli:app"
+ghidra_notes_add = "ghidra_re_skill.cli:app"
+ghidra_notes_sync = "ghidra_re_skill.cli:app"
+ghidra_notes_pull = "ghidra_re_skill.cli:app"
+ghidra_notes_status = "ghidra_re_skill.cli:app"
+ghidra_notes_remediate = "ghidra_re_skill.cli:app"
+ghidra_import_analyze = "ghidra_re_skill.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["ghidra_re_skill*"]

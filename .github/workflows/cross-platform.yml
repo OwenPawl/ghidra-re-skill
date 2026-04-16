@@ -1,0 +1,65 @@
+name: Cross-platform CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[dev]" || pip install -e .
+
+      - name: Smoke test – help
+        run: python -m ghidra_re_skill --help
+
+      - name: Run tests (if present)
+        run: |
+          if python -c "import pytest" 2>/dev/null && [ -d tests ]; then
+            pytest tests/
+          else
+            echo "No pytest or tests/ directory found – skipping."
+          fi
+        shell: bash
+
+      - name: Verify no .sh files remain (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          found=$(find . -name "*.sh" -not -path "./.git/*" 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "FAIL: .sh files still present:"
+            echo "$found"
+            exit 1
+          else
+            echo "OK: no .sh files found"
+          fi
+
+      - name: Verify no .sh files remain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -Filter "*.sh" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -notlike "*\.git\*" }
+          if ($files) {
+            Write-Error "FAIL: .sh files still present: $($files.FullName -join ', ')"
+            exit 1
+          } else {
+            Write-Output "OK: no .sh files found"
+          }
