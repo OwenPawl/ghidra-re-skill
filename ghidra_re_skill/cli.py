@@ -29,11 +29,13 @@ bridge_app = typer.Typer(help="Bridge session management.", no_args_is_help=True
 mission_app = typer.Typer(help="Mission management.", no_args_is_help=True)
 notes_app = typer.Typer(help="Shared notes management.", no_args_is_help=True)
 import_app = typer.Typer(help="Import and analysis.", no_args_is_help=True)
+publish_app = typer.Typer(help="Build share/install packages.", no_args_is_help=True)
 
 app.add_typer(bridge_app, name="bridge")
 app.add_typer(mission_app, name="mission")
 app.add_typer(notes_app, name="notes")
 app.add_typer(import_app, name="import")
+app.add_typer(publish_app, name="publish")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -656,5 +658,91 @@ def import_run_script(
     try:
         result = run_script(script, project, program or None)
         _print_json(result)
+    except Exception as e:
+        _die(str(e))
+
+
+# ---------------------------------------------------------------------------
+# install command
+# ---------------------------------------------------------------------------
+
+
+@app.command("install")
+def install_cmd(
+    host: str = typer.Option("auto", "--host", help="Target host: codex | claude | both | auto."),
+    source: Optional[str] = typer.Option(None, "--source", help="Source directory to install from."),
+    no_bootstrap: bool = typer.Option(False, "--no-bootstrap", help="Skip bootstrap after install."),
+    skip_smoke_test: bool = typer.Option(False, "--skip-smoke-test", help="Skip smoke test in bootstrap."),
+    skip_bridge_install: bool = typer.Option(False, "--skip-bridge-install", help="Skip bridge install in bootstrap."),
+) -> None:
+    """Install the skill into AI host directories (~/.codex/skills/ghidra-re etc.)."""
+    from ghidra_re_skill.modules.publisher import install_skill
+
+    source_path = Path(source) if source else None
+    try:
+        installed = install_skill(
+            host=host,
+            source_dir=source_path,
+            run_bootstrap=not no_bootstrap,
+            skip_smoke_test=skip_smoke_test,
+            skip_bridge_install=skip_bridge_install,
+        )
+        for p in installed:
+            console.print(f"install_skill: installed {p}")
+    except Exception as e:
+        _die(str(e))
+
+
+# ---------------------------------------------------------------------------
+# publish subcommands
+# ---------------------------------------------------------------------------
+
+
+@publish_app.command("share")
+def publish_share(
+    output: Optional[str] = typer.Argument(None, help="Output zip path."),
+) -> None:
+    """Build a cross-platform share package zip."""
+    from ghidra_re_skill.modules.publisher import build_share_package
+
+    try:
+        out = build_share_package(Path(output) if output else None)
+        console.print(f"Built share package: {out}")
+    except Exception as e:
+        _die(str(e))
+
+
+@publish_app.command("mac-desktop")
+def publish_mac(
+    output: Optional[str] = typer.Argument(None, help="Output zip path."),
+    without_ghidra_payload: bool = typer.Option(False, "--without-ghidra-payload", help="Omit embedded Ghidra."),
+) -> None:
+    """Build a macOS desktop share package zip."""
+    from ghidra_re_skill.modules.publisher import build_mac_desktop_share_package
+
+    try:
+        out = build_mac_desktop_share_package(
+            Path(output) if output else None,
+            include_ghidra_payload=not without_ghidra_payload,
+        )
+        console.print(f"Built mac desktop share package: {out}")
+    except Exception as e:
+        _die(str(e))
+
+
+@publish_app.command("windows-desktop")
+def publish_windows(
+    output: Optional[str] = typer.Argument(None, help="Output zip path."),
+    ghidra_zip: Optional[str] = typer.Option(None, "--ghidra-zip", help="Path to Ghidra zip to embed."),
+) -> None:
+    """Build a Windows desktop share package zip."""
+    from ghidra_re_skill.modules.publisher import build_windows_desktop_share_package
+
+    try:
+        out = build_windows_desktop_share_package(
+            Path(output) if output else None,
+            Path(ghidra_zip) if ghidra_zip else None,
+        )
+        console.print(f"Built windows desktop share package: {out}")
     except Exception as e:
         _die(str(e))
