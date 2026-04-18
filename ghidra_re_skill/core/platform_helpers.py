@@ -31,8 +31,13 @@ def get_config_home() -> Path:
 
 
 def get_skill_root() -> Path:
-    """Return the root directory of this skill installation."""
-    return Path(__file__).parent.parent
+    """Return the root directory of this skill installation.
+
+    File lives at ghidra_re_skill/core/platform_helpers.py, so three .parent
+    steps are needed to reach the repo/install root that contains scripts/,
+    templates/, bridge-extension/, etc.
+    """
+    return Path(__file__).parent.parent.parent
 
 
 def get_workspace_root() -> Path:

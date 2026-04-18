@@ -42,27 +42,33 @@ jobs:
           fi
         shell: bash
 
-      - name: Verify no .sh files remain (Unix)
+      - name: Verify only allowed .sh files remain (Unix)
         if: runner.os != 'Windows'
         run: |
-          found=$(find . -name "*.sh" -not -path "./.git/*" 2>/dev/null || true)
+          # scripts/common.sh is a sourced library (not a standalone tool); allow it.
+          found=$(find . -name "*.sh" \
+            -not -path "./.git/*" \
+            -not -path "./scripts/common.sh" \
+            2>/dev/null || true)
           if [ -n "$found" ]; then
-            echo "FAIL: .sh files still present:"
+            echo "FAIL: unexpected .sh files present:"
             echo "$found"
             exit 1
           else
-            echo "OK: no .sh files found"
+            echo "OK: only allowed .sh files found"
           fi
 
-      - name: Verify no .sh files remain (Windows)
+      - name: Verify only allowed .sh files remain (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $allowed = @("scripts\common.sh")
           $files = Get-ChildItem -Recurse -Filter "*.sh" -ErrorAction SilentlyContinue |
-                   Where-Object { $_.FullName -notlike "*\.git\*" }
+                   Where-Object { $_.FullName -notlike "*\.git\*" } |
+                   Where-Object { $rel = $_.FullName.Substring((Get-Location).Path.Length + 1); $rel -notin $allowed }
           if ($files) {
-            Write-Error "FAIL: .sh files still present: $($files.FullName -join ', ')"
+            Write-Error "FAIL: unexpected .sh files present: $($files.FullName -join ', ')"
             exit 1
           } else {
-            Write-Output "OK: no .sh files found"
+            Write-Output "OK: only allowed .sh files found"
           }
