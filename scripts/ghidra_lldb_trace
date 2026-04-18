@@ -322,7 +322,7 @@ cat << 'HANDLER_CLS'
                 _err = lldb.SBError()
                 _isa_raw = _proc.ReadPointerFromMemory(_x0_val, _err)
                 if _err.Success():
-                    _isa = _isa_raw & 0x007ffffffffffff8  # arm64e ISA mask: strips PAC bits AND clears low 3 alignment bits
+                    _isa = _isa_raw & 0x0000FFFFFFFFFFF8  # arm64e ISA mask: clears 16-bit PAC (bits 63:48) + low 3 alignment bits
                     rec["objc_isa"] = hex(_isa)
                     _isa_entry = _resolve_isa_entry(_isa)
                     if isinstance(_isa_entry, dict):
