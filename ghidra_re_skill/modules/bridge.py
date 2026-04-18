@@ -16,7 +16,6 @@ import requests
 
 from ghidra_re_skill.core.config import cfg
 from ghidra_re_skill.core.ghidra_locator import (
-    analyze_headless_path,
     bridge_settings_dir,
     detect_ghidra_dir,
     detect_jdk_dir,
@@ -25,18 +24,14 @@ from ghidra_re_skill.core.ghidra_locator import (
     is_valid_jdk_dir,
     resolve_ghidra_dir,
 )
-from ghidra_re_skill.core.platform_helpers import is_macos, is_windows
 from ghidra_re_skill.core.subprocess_utils import (
     check_pid_alive,
     is_ghidra_running,
     run,
-    run_output,
 )
 from ghidra_re_skill.core.utils import (
     extract_selectors_from_json,
-    load_json,
     new_uuid,
-    sanitize_name,
     timestamp,
     utc_now,
     write_json,
@@ -49,8 +44,6 @@ from ghidra_re_skill.core.utils import (
 
 def auto_configure() -> None:
     """Detect Ghidra/JDK and update cfg in-place if needed."""
-    from ghidra_re_skill.core.ghidra_locator import resolve_ghidra_dir as _resolve
-
     if not is_valid_ghidra_dir(cfg.ghidra_install_dir):
         detected = detect_ghidra_dir()
         if detected:
