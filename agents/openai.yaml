@@ -5,3 +5,30 @@ interface:
 
 policy:
   allow_implicit_invocation: true
+
+# Entry points (Python package – install with: pip install -e .)
+commands:
+  bootstrap: "python -m ghidra_re_skill bootstrap"
+  doctor: "python -m ghidra_re_skill doctor"
+  bridge_arm: "python -m ghidra_re_skill bridge arm"
+  bridge_disarm: "python -m ghidra_re_skill bridge disarm"
+  bridge_call: "python -m ghidra_re_skill bridge call"
+  bridge_status: "python -m ghidra_re_skill bridge status"
+  bridge_sessions: "python -m ghidra_re_skill bridge sessions"
+  bridge_build: "python -m ghidra_re_skill bridge build"
+  bridge_install: "python -m ghidra_re_skill bridge install"
+  mission_start: "python -m ghidra_re_skill mission start"
+  mission_status: "python -m ghidra_re_skill mission status"
+  mission_finish: "python -m ghidra_re_skill mission finish"
+  mission_report: "python -m ghidra_re_skill mission report"
+  mission_trace: "python -m ghidra_re_skill mission trace"
+  mission_autopilot: "python -m ghidra_re_skill mission autopilot"
+  notes_add: "python -m ghidra_re_skill notes add"
+  notes_sync: "python -m ghidra_re_skill notes sync"
+  notes_pull: "python -m ghidra_re_skill notes pull"
+  notes_status: "python -m ghidra_re_skill notes status"
+  notes_remediate: "python -m ghidra_re_skill notes remediate"
+  notes_open_shared: "python -m ghidra_re_skill notes open-shared"
+  import_analyze: "python -m ghidra_re_skill import analyze"
+  import_macos_framework: "python -m ghidra_re_skill import macos-framework"
+  import_run_script: "python -m ghidra_re_skill import run-script"

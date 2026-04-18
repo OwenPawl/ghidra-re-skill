@@ -51,80 +51,66 @@
 The main commands are:
 
 ```bash
-./scripts/ghidra_notes_status
-./scripts/ghidra_notes_add title='Missing live-export ingest' body='Baseline export still requires close/reopen for an already-open target.' category=workflow target=workflowkit_bug_smoke:WorkflowKit
-./scripts/ghidra_notes_sync
-./scripts/ghidra_notes_pull
-./scripts/ghidra_notes_open_shared
+ghidra-re notes status
+ghidra-re notes add --title 'Missing live-export ingest' --body 'Baseline export still requires close/reopen for an already-open target.' --category workflow --target workflowkit_bug_smoke:WorkflowKit
+ghidra-re notes sync
+ghidra-re notes pull
+ghidra-re notes open-shared
 ```
 
 The old [use-case-driven-notes.md](./references/use-case-driven-notes.md) file is now legacy/reference-only and no longer the canonical live backlog.
 
 ## Quick install
 
-The recommended install path for either host is the host-agnostic installer in the repo. It copies the checkout into the right place, runs `bootstrap`, and installs the Ghidra live-bridge extension. Run it from a fresh `git clone`:
+The recommended install path for either host is the Python CLI installer. It copies the checkout into the right place, runs `bootstrap`, and installs the Ghidra live-bridge extension:
 
 ```bash
-./scripts/install_skill                 # auto-detect host(s): Codex, Claude Code, or both
-./scripts/install_skill --host codex    # force Codex only
-./scripts/install_skill --host claude   # force Claude Code only
-./scripts/install_skill --host both     # install into every known host
+pip install -e .                                          # install the Python package first
+ghidra-re install                                         # auto-detect host(s): Codex, Claude Code, or both
+ghidra-re install --host codex                            # force Codex only
+ghidra-re install --host claude                           # force Claude Code only
+ghidra-re install --host both                             # install into every known host
 ```
 
-Or, if you prefer the fully manual path:
+Or install manually:
 
 ```bash
 # Codex
 mkdir -p ~/.codex/skills
 cp -R . ~/.codex/skills/ghidra-re
-~/.codex/skills/ghidra-re/scripts/bootstrap
+pip install -e ~/.codex/skills/ghidra-re
+ghidra-re bootstrap
 
 # Claude Code
 mkdir -p ~/.claude/skills
 cp -R . ~/.claude/skills/ghidra-re
-~/.claude/skills/ghidra-re/scripts/bootstrap
+pip install -e ~/.claude/skills/ghidra-re
+ghidra-re bootstrap
 ```
 
-Both hosts load the same `SKILL.md` (YAML frontmatter with `name` + `description`) and the same `scripts/` surface; nothing in the skill needs to know which host launched it.
+Both hosts load the same `SKILL.md` (YAML frontmatter with `name` + `description`) and the same Python CLI surface; nothing in the skill needs to know which host launched it.
 
-If you want a one-file Mac installer bundle:
+If you want a one-file share bundle:
 
 ```bash
-./scripts/build_mac_desktop_share_package
+ghidra-re publish share                        # cross-platform zip
+ghidra-re publish mac-desktop                  # macOS zip with optional Ghidra payload
+ghidra-re publish windows-desktop              # Windows zip with PowerShell installer
 ```
 
-That creates a zip that can install the skill, Ghidra, the launcher app, and Java 21 on another Mac.
-
-If you want a one-file Windows installer bundle:
-
-```bash
-./scripts/build_windows_desktop_share_package
-```
-
-That creates a zip with a PowerShell installer that can:
+The macOS bundle can install the skill, Ghidra, the launcher app, and Java 21 on another Mac.
+The Windows bundle includes a PowerShell installer that can:
 - install the skill into `%USERPROFILE%\.codex\skills\ghidra-re`
 - install a user-scoped `GhidraRe` PowerShell module
-- install Git for Windows when Git Bash is missing
 - install Java 21 when needed
 - reuse an existing Ghidra install or unpack a `ghidra_*.zip` placed next to the installer
 
 ## Publish to GitHub
 
-If `gh` is installed and authenticated:
+If `gh` is installed and authenticated, publish the repository directly:
 
 ```bash
-./publish-to-github.sh
-```
-
-Defaults:
-
-- repo name: `ghidra-re-skill`
-- visibility: `public`
-
-You can override both:
-
-```bash
-./publish-to-github.sh my-repo-name private
+gh repo create ghidra-re-skill --public --source=. --push
 ```
 
 ## Requirements
@@ -157,7 +143,7 @@ Shared-notes defaults:
 
 ## Windows Apple-target flow
 
-The Windows installer now installs a PowerShell module named `GhidraRe`. After install:
+The Windows installer installs a PowerShell module named `GhidraRe`. After install:
 
 ```powershell
 Import-Module GhidraRe
@@ -165,7 +151,7 @@ Get-GhidraReBridgeSessions
 Start-GhidraReMission -Name win_trace -Goal 'Trace a subsystem' -Target 'source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit'
 ```
 
-The module is a native PowerShell-facing layer over the same `ghidra-re` scripts, so it feels normal in PowerShell while still reusing the skill's battle-tested Bash workflow underneath.
+The module is a native PowerShell-facing layer over the same `ghidra-re` Python CLI.
 
 The shared-notes flow is also available from PowerShell:
 
@@ -177,31 +163,42 @@ Receive-GhidraReNotes
 Open-GhidraReSharedNotes
 ```
 
-If you prefer Bash directly, the source-backed Apple flow is still:
-
 When a Windows machine needs Apple binaries, register a mounted or extracted macOS root as a source:
 
 ```bash
-./scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache
-./scripts/ghidra_source_list
-./scripts/ghidra_import_analyze source:mac-image:/System/Library/PrivateFrameworks/VoiceShortcuts.framework/Versions/A/VoiceShortcuts
+ghidra-re bridge call /source/add mac-image root=/d/macos-root platform=macos-image copy=cache
+ghidra-re import analyze source:mac-image:/System/Library/PrivateFrameworks/VoiceShortcuts.framework/Versions/A/VoiceShortcuts
 ```
 
 Mission targets can use the same source form:
 
 ```bash
-./scripts/ghidra_mission_start win_trace \
-  goal='Trace a subsystem across Apple userland targets' \
-  target=source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit
+ghidra-re mission start win_trace \
+  --goal 'Trace a subsystem across Apple userland targets' \
+  --target 'source:mac-image:/System/Library/PrivateFrameworks/WorkflowKit.framework/Versions/A/WorkflowKit'
 ```
 
 If you are preparing a Windows share package on another machine and already have a Windows Ghidra zip, you can embed it:
 
 ```bash
-./scripts/build_windows_desktop_share_package out.zip --ghidra-zip /path/to/ghidra_*.zip
+ghidra-re publish windows-desktop out.zip --ghidra-zip /path/to/ghidra_*.zip
 ```
 
-## Typical workflow
+## Recent Robustness Improvements
+
+The following low-level improvements were applied to the Python package after the initial cross-platform refactor, based on a thorough code review:
+
+| Area | Improvement |
+|------|-------------|
+| **Bridge XML patching** | `_patch_tool_xml` / `_patch_frontend_xml` now use `xml.etree.ElementTree` instead of fragile regex substitutions. The parser safely removes the old "Codex Bridge" `PACKAGE`, removes stray `INCLUDE` elements, inserts `CodexBridgePlugin` inside the `"Ghidra Core"` `PACKAGE`, and skips malformed files with a warning rather than corrupting them. |
+| **Stale-lock detection** | The directory-based `bridge-current.lock` now checks `lock.stat().st_mtime` on each retry. If the lock is older than 30 seconds (configurable) it is removed automatically, preventing permanent hangs after a crash or SIGKILL. |
+| **Windows process check** | `check_pid_alive()` on Windows now opens the process with `PROCESS_QUERY_LIMITED_INFORMATION` (0x1000), calls `GetExitCodeProcess`, and confirms the exit code equals 259 (`STILL_ACTIVE`). The handle is always closed in a `finally` block. |
+| **Safe publisher backups** | `install_skill` uses `datetime`-based timestamps and calls `shutil.rmtree(backup)` before `shutil.move` when the backup path already exists, preventing unintended nesting (e.g. `ghidra-re.backup-TS/ghidra-re`). |
+| **`shutil.copytree` tree copy** | The manual recursive `_copy_tree` was replaced with `shutil.copytree(..., ignore=ignore_func, dirs_exist_ok=True)`, which is faster, handles symlinks correctly, and uses the stdlib's battle-tested copy engine. |
+
+These changes improve reliability during long-running headless analysis, on Windows with rapid lock-acquire / lock-release cycles, and whenever the bridge extension is installed or reinstalled multiple times in the same Ghidra settings directory.
+
+
 
 ```bash
 ./scripts/bootstrap

@@ -16,110 +16,67 @@ Use this skill for repeatable, headless-first Ghidra work on macOS or Windows. I
 - Workspace root: `~/ghidra-projects`
 - Skill root — **resolve this first** before running any script (see below)
 
-The skill is host-agnostic. Every script under `scripts/` resolves its own root from `$BASH_SOURCE`, so there is no hardcoded install location. The unified host layer lives in `scripts/lib/skill_host.sh` and is the single source of truth for Codex vs Claude Code install paths. Use `scripts/install_skill --host auto|codex|claude|both` to copy the checkout into one or more hosts.
+The skill is host-agnostic and runs on Windows, macOS, and Linux with **zero Bash dependency**. All orchestration is implemented in Python 3.11+ under the `ghidra_re_skill/` package. Install with `pip install -e .` from the skill root, then use `python -m ghidra_re_skill` (or the `ghidra-re` console script) for all operations.
 
 ## Resolving the Skill Root
 
-Before running any `scripts/` command, resolve `SKILL_ROOT` with this one-liner. It checks the standard install locations first, then searches Claude Code's plugin directory as a fallback — covering every load path automatically:
+The Python package is installed via `pip install -e .` from the skill root. After installation, use `ghidra-re` (console script) or `python -m ghidra_re_skill` from anywhere. No `SKILL_ROOT` variable or path prefix is needed.
 
-```bash
-SKILL_ROOT="$(
-  for p in \
-    "${CODEX_HOME:-$HOME/.codex}/skills/ghidra-re" \
-    "${CLAUDE_HOME:-$HOME/.claude}/skills/ghidra-re"; do
-    [[ -f "$p/SKILL.md" ]] && printf '%s' "$p" && break
-  done
-)" ; [[ -z "$SKILL_ROOT" ]] && SKILL_ROOT="$(
-  find "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin" \
-    -maxdepth 5 -name 'SKILL.md' -path '*/ghidra-re/SKILL.md' 2>/dev/null \
-    | head -1 | xargs -I{} dirname {}
-)"
-echo "Skill root: $SKILL_ROOT"
-```
-
-Once set, prefix every `scripts/` call with `"$SKILL_ROOT/"`:
-```bash
-"$SKILL_ROOT/scripts/bootstrap"
-"$SKILL_ROOT/scripts/ghidra_import_analyze" <binary> [project_name]
-```
-
-Known root paths (for reference — use the discovery snippet above rather than hardcoding):
-- `~/.codex/skills/ghidra-re` — OpenAI Codex standard install
-- `~/.claude/skills/ghidra-re` — Claude Code standard install via `install_skill`
-- `~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/.../skills/ghidra-re` — Claude Code plugin install (UUID subdirectories vary per machine)
-
-V1 is optimized for Apple Mach-O reversing and dyld-extracted binaries. It now includes a localhost GUI bridge extension for live inspection, annotation, and controlled program surgery inside open Ghidra sessions, plus mission workspaces for multi-target investigation across frameworks, daemons, and helpers.
-
-The custom automation scripts ship as Java Ghidra scripts because that is the most reliable headless path on this machine.
-On Windows, the public repo now also ships a native PowerShell wrapper layer in `powershell/` for people who want first-class PowerShell commands instead of starting in Git Bash.
+To install: `pip install -e /path/to/ghidra-re-skill`
 
 ## Quick Start
 
-> All `scripts/` paths below are relative to `$SKILL_ROOT`. Run the discovery snippet in "Resolving the Skill Root" first, then prefix every command with `"$SKILL_ROOT/"`.
+> All commands use the `ghidra-re` CLI (installed via `pip install -e .`). Equivalent: `python -m ghidra_re_skill`.
 
-1. On a fresh machine, run `"$SKILL_ROOT/scripts/bootstrap"` once.
-2. If bootstrap cannot find Ghidra or Java 21, run `"$SKILL_ROOT/scripts/doctor"`.
+1. On a fresh machine, run `ghidra-re bootstrap` once.
+2. If bootstrap cannot find Ghidra or Java 21, run `ghidra-re doctor`.
 3. On Windows, if the targets live in a mounted or extracted macOS image, register that source first:
-   - `scripts/ghidra_source_add mac-image root=/d/macos-root platform=macos-image copy=cache`
+   - `python -m ghidra_re_skill bridge call /source/add mac-image root=/d/macos-root platform=macos-image copy=cache`
 4. Start a multi-target mission when the task spans more than one framework, daemon, or helper:
-   - `scripts/ghidra_mission_start <mission_name> goal=... target=... [target=...] [seed=...]`
+   - `ghidra-re mission start <mission_name> --goal "..." --target <binary_or_project:program>`
 5. Extend the mission with a seed-driven trace:
-   - `scripts/ghidra_mission_trace <mission_name> seed=<kind:value>`
+   - `ghidra-re mission trace <mission_name> <seed>`
 6. For a more autonomous pass, let the mission keep driving its own next hops:
-   - `scripts/ghidra_mission_autopilot <mission_name> [rounds=3]`
+   - `ghidra-re mission autopilot <mission_name>`
 7. Read the mission report:
-   - `scripts/ghidra_mission_report <mission_name>`
-   - `scripts/ghidra_mission_report <mission_name> format=casefile`
-8. Finish the mission and close its live Ghidra sessions unless you explicitly keep them open:
-   - `scripts/ghidra_mission_finish <mission_name>`
+   - `ghidra-re mission report <mission_name>`
+8. Finish the mission:
+   - `ghidra-re mission finish <mission_name>`
 9. For a single target, import and analyze into a dedicated project:
-   - `scripts/ghidra_import_analyze <binary|source:name:/path/in/image> [project_name]`
+   - `ghidra-re import analyze <binary|source:name:/path/in/image> [project_name]`
 10. Export the default Apple-focused bundle:
-   - `scripts/ghidra_export_apple_bundle <project_name> <program_name>`
-11. For Swift-heavy Apple targets, resolve `_OUTLINED_FUNCTION_*` stubs **before** exporting or decompiling — this is essential for any dyld-extracted binary (WorkflowKit, BackgroundTaskAgent, etc.) where the Swift compiler outlined ARC/copy/move helpers:
-   - `"$SKILL_ROOT/scripts/ghidra_resolve_swift_outlined" <project_name> <program_name> [dry_run=true] [inline=false] [skip_stubs=true] [scan_fun_stubs=true] [second_pass=true] [build_authstub_map=true] [cache_path=<path>]`
-   - Pass `build_authstub_map=true` to resolve auth stubs to real symbol names (e.g. `outlined$authstub$swift_retain`) using the live dyld shared cache. Requires macOS with the system cache at its default location or `cache_path=` override. Adds ~30 s for the map build step.
-   - Re-export the Apple bundle afterwards to get updated function names in the inventory.
-   - To build or refresh the map separately (e.g. before a batch run): `scripts/ghidra_build_authstub_map <project_name> <program_name>`
-12. Generate a surface-level report before chasing individual mangled symbols:
-   - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
-   - `scripts/ghidra_describe_swift_type <project_name> <program_name> <TypeName>`
-12. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
-   - `scripts/ghidra_export_bug_hunt_bundle <project_name> <program_name>`
-13. Generate a function dossier for a top candidate:
-   - `scripts/ghidra_function_dossier <project_name> <program_name> <function_or_address>`
-14. Apply a finding back into the project when you confirm something interesting:
-   - `scripts/ghidra_apply_finding <project_name> <program_name> function=... title=... comment=...`
-15. Run an extra script when needed:
-   - `scripts/ghidra_run_script <project_name> <program_name> <script_name> [script args...]`
-16. Record any friction or missing-feature notes through the shared notes flow before you wrap up the session:
-   - `scripts/ghidra_notes_add title=... body=... category=workflow`
-   - `scripts/ghidra_notes_status`
-   - `scripts/ghidra_notes_open_shared`
-17. Open the project in the GUI:
-   - `scripts/ghidra_open_gui <project_name> [program_name]`
-18. Arm or reuse the live bridge when you want an interactive RE loop:
-   - `scripts/ghidra_bridge_open <project_name> [program_name]`
-19. Use the live bridge wrappers for inspection or edits:
-   - `scripts/ghidra_bridge_current_context`
-   - `scripts/ghidra_bridge_snapshot`
-   - `scripts/ghidra_bridge_analyze_target <query>`
-   - `scripts/ghidra_bridge_decompile_current`
-   - `scripts/ghidra_bridge_functions_search <query>`
-   - `scripts/ghidra_bridge_selector_trace <selector>`
-   - `scripts/ghidra_bridge_swift_search <type_or_method>`
-   - `scripts/ghidra_bridge_swift_type <TypeName>`
-   - `scripts/ghidra_bridge_xrefs`
-   - `scripts/ghidra_bridge_rename ...`
-   - `scripts/ghidra_bridge_comment ...`
-   - `scripts/ghidra_bridge_patch_bytes ...`
-   - `scripts/ghidra_bridge_patch_instruction ...`
-20. Use the dyld-aware macOS import helper when a framework path comes from a live system image or extracted source root:
-   - `scripts/ghidra_import_macos_framework </System/.../Framework.framework/Framework> [project_name] [copy=cache|direct] [source=<name>]`
-21. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
-   - `scripts/build_mac_desktop_share_package [output_zip]`
+   - `ghidra-re bridge call /export/apple-bundle --project <project_name> --program <program_name>`
+11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
+   - `ghidra-re bridge call /export/bug-hunt-bundle`
+12. Generate a function dossier for a top candidate:
+   - `ghidra-re bridge call /function/dossier`
+13. Apply a finding back into the project when you confirm something interesting:
+   - `ghidra-re bridge call /apply-finding`
+14. Run an extra script when needed:
+   - `ghidra-re import run-script <script_name> <project_name> [program_name]`
+15. Record any friction or missing-feature notes through the shared notes flow before you wrap up the session:
+   - `ghidra-re notes add --title "..." --body "..." --category workflow`
+   - `ghidra-re notes status`
+   - `ghidra-re notes open-shared`
+16. Arm or reuse the live bridge when you want an interactive RE loop:
+   - `ghidra-re bridge arm <project_name> [program_name]`
+17. Use the live bridge for inspection or edits:
+   - `ghidra-re bridge call /session`
+   - `ghidra-re bridge call /bridge/snapshot`
+   - `ghidra-re bridge call /bridge/analyze-target`
+   - `ghidra-re bridge call /decompile/current`
+   - `ghidra-re bridge call /functions/search <query>`
+   - `ghidra-re bridge call /symbols/get`
+   - `ghidra-re bridge call /bridge/rename`
+   - `ghidra-re bridge call /bridge/comment`
+   - `ghidra-re bridge call /bridge/patch-bytes`
+   - `ghidra-re bridge call /bridge/patch-instruction`
+18. Use the dyld-aware macOS import helper when a framework path comes from a live system image or extracted source root:
+   - `ghidra-re import macos-framework </System/.../Framework.framework/Framework> [--project <name>]`
+19. Build a one-file macOS share bundle when you want to hand the skill and Ghidra to another desktop:
+   - `ghidra-re publish mac-desktop [output_zip]`
 22. Build a one-file Windows share bundle when you want easy installation on a Windows machine:
-   - `scripts/build_windows_desktop_share_package [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
+   - `ghidra-re publish windows-desktop [output_zip] [--ghidra-zip /path/to/ghidra.zip]`
 23. On Windows, optionally import the native module after install:
    - `Import-Module GhidraRe`
    - `Get-GhidraReBridgeSessions`
@@ -193,10 +150,11 @@ On Windows, the public repo now also ships a native PowerShell wrapper layer in 
 ### 6) Use the live bridge for iterative GUI sessions
 - Prefer the live bridge whenever the target is already open or the task will involve repeated `search -> navigate -> decompile -> refs` loops.
 - Prefer headless exports for wide scans, batch bundles, or cold-start project setup; switch to the bridge once you want a tighter interactive loop.
-- `scripts/bootstrap` installs the bridge extension into the user's Ghidra settings when possible.
+- `ghidra-re bootstrap` installs the bridge extension into the user's Ghidra settings when possible. The installer uses `xml.etree.ElementTree` to safely patch Ghidra tool config files (`.tcd`), removing any old "Codex Bridge" package and adding the plugin to the "Ghidra Core" package — it never mangles XML with regex and skips malformed files gracefully.
 - If Ghidra was already running before the install, restart it once or run `EnableCodexBridge.java` from the GUI Script Manager.
-- The bridge now keeps a real multi-session registry under `~/.config/ghidra-re/bridge-sessions/` and a compatibility pointer at `~/.config/ghidra-re/bridge-current.json`.
-- `scripts/ghidra_bridge_open` and `scripts/ghidra_bridge_arm` write per-request files under `~/.config/ghidra-re/bridge-requests/`, first give an already-running Ghidra session a chance to consume them, and only then launch a detached GUI session if needed.
+- The bridge now keeps a real multi-session registry under `~/.config/ghidra-re/bridge-sessions/` and a compatibility pointer at `~/.config/ghidra-re/bridge-current.json`. The lock used when updating `bridge-current.json` auto-expires stale locks (older than 30 s) to prevent permanent hangs after a crash.
+- On Windows, `check_pid_alive()` uses `PROCESS_QUERY_LIMITED_INFORMATION` + `GetExitCodeProcess` with proper handle cleanup instead of a bare `OpenProcess` flag, reducing false-positive "alive" results after a process exits.
+- `ghidra-re bridge arm` and `ghidra-re bridge call` write per-request files under `~/.config/ghidra-re/bridge-requests/`, first give an already-running Ghidra session a chance to consume them, and only then launch a detached GUI session if needed.
 - Use `scripts/ghidra_bridge_sessions` to list live sessions and `scripts/ghidra_bridge_select` to change the default target.
 - On macOS, detached launches use a hidden `screen` keeper session so Ghidra survives after the launcher command exits and the bridge remains usable across the rest of the Codex session.
 - Cross-project arms are supported: a running `bsr_smoke` session can ignore a `workflowkit_bug_smoke` request while a newly launched WorkflowKit instance consumes the same request file and becomes another live session.

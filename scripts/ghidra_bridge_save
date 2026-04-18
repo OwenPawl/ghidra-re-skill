@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
-
-body="$(ghidra_re_bridge_json_from_kv write=true "$@")"
-"$SCRIPT_DIR/ghidra_bridge_call" /program/save "$body"

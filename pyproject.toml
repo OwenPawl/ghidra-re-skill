@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghidra-re-skill"
+version = "0.1.0"
+description = "Cross-platform Python orchestration layer for Ghidra reverse-engineering"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+ghidra-re = "ghidra_re_skill.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["ghidra_re_skill*"]

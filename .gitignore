@@ -14,3 +14,13 @@ ghidra-re-skill-share*.zip
 ghidra-re-mac-desktop-share*.zip
 
 dist/
+
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+build/
