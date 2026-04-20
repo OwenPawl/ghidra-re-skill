@@ -34,6 +34,14 @@ Structure export scripts create additional files under the same program export d
     Top-level `categories` array with per-category instance/class methods and protocols.
     Produced by `ghidra-re export objc-layout <project> <program>`.
 
+- `swift_layout.json`
+  - Per-type Swift structural layout: `kind` (class/struct/enum/protocol), `mangled`,
+    `demangled`, `metadata_addr`, `fields` (name/mangled_type/type/is_var), `enum_cases`
+    (name/payload_type/is_indirect), `conformances` (protocol/witness_table_addr).
+    Built from `__swift5_fieldmd`, `__swift5_types`, and `__swift5_protos` sections.
+    Demangled names use `swift demangle` when available.
+    Produced by `ghidra-re export swift-layout <project> <program>`.
+
 Targeted scripts create additional files such as:
 
 - `decompile_<function>.c`

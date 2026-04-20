@@ -297,6 +297,7 @@ def doctor() -> None:
         cfg.custom_scripts_dir / "ExportFunctionDossier.java",
         cfg.custom_scripts_dir / "ExportMachOStructure.java",
         cfg.custom_scripts_dir / "ExportObjCTypeLayout.java",
+        cfg.custom_scripts_dir / "ExportSwiftTypeLayout.java",
     ]:
         if script.exists():
             record("OK", "Ghidra script present", str(script))
@@ -730,6 +731,32 @@ def export_objc_layout(
     conformances, ivar offsets/types, and method selectors/imp addresses.
     """
     from ghidra_re_skill.modules.exporter import export_objc_layout as _export
+
+    try:
+        result = _export(project, program or None, output)
+        _print_json(result)
+        if result.get("ok"):
+            console.print(f"[green]Wrote[/green] {result.get('output')}")
+    except Exception as e:
+        _die(str(e))
+
+
+@export_app.command("swift-layout")
+def export_swift_layout(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument("", help="Program name within the project (optional when --output given)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination JSON file (default: exports/<project>/<program>/swift_layout.json)."),
+) -> None:
+    """Export Swift 5 type layout to swift_layout.json.
+
+    Runs ExportSwiftTypeLayout.java via Ghidra headless. Walks __swift5_fieldmd
+    (field descriptors), __swift5_types (type context descriptors), and
+    __swift5_protos (protocol conformance descriptors). Emits per-type kind,
+    mangled/demangled names, field names and types, enum cases, and protocol
+    conformances with witness table addresses. Demangling uses 'swift demangle'
+    when available.
+    """
+    from ghidra_re_skill.modules.exporter import export_swift_layout as _export
 
     try:
         result = _export(project, program or None, output)

@@ -58,6 +58,10 @@ To install: `pip install -e /path/to/ghidra-re-skill`
 10b. Export per-class ObjC ivar and method layout (superclass chains, protocol conformances, ivar offsets, method selectors/imp addresses, categories):
    - `ghidra-re export objc-layout <project_name> <program_name>`
    - Output: `~/ghidra-projects/exports/<project>/<program>/objc_layout.json`
+10c. Export Swift type layout (structs/classes/enums, fields with types, enum cases, protocol conformances + witness table addresses):
+   - `ghidra-re export swift-layout <project_name> <program_name>`
+   - Output: `~/ghidra-projects/exports/<project>/<program>/swift_layout.json`
+   - Requires `swift demangle` on PATH for human-readable type names.
 11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `ghidra-re bridge call /export/bug-hunt-bundle`
 12. Generate a function dossier for a top candidate:

@@ -101,3 +101,44 @@ def export_objc_layout(
     )
     result["output"] = str(out_path)
     return result
+
+
+def export_swift_layout(
+    project: str,
+    program: str | None = None,
+    output: str | None = None,
+) -> dict[str, Any]:
+    """Run ExportSwiftTypeLayout.java and return the path to swift_layout.json.
+
+    Parameters
+    ----------
+    project:
+        Ghidra project name (must already exist under the workspace).
+    program:
+        Program name within the project.  Required when *output* is omitted.
+    output:
+        Explicit destination file path.  Auto-derived under
+        ``exports/<project>/<program>/swift_layout.json`` when omitted.
+    """
+    from ghidra_re_skill.modules.importer import run_script
+
+    if output:
+        out_path = Path(output)
+    elif program:
+        out_path = cfg.export_dir(project, program) / "swift_layout.json"
+    else:
+        raise RuntimeError(
+            "Either --output or program name must be provided to derive "
+            "the export destination path."
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    result = run_script(
+        script_name="ExportSwiftTypeLayout.java",
+        project_name=project,
+        program_name=program,
+        script_args=[f"output={out_path}"],
+    )
+    result["output"] = str(out_path)
+    return result
