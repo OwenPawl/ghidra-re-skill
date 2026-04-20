@@ -296,6 +296,7 @@ def doctor() -> None:
         cfg.custom_scripts_dir / "TriageBugPaths.java",
         cfg.custom_scripts_dir / "ExportFunctionDossier.java",
         cfg.custom_scripts_dir / "ExportMachOStructure.java",
+        cfg.custom_scripts_dir / "ExportObjCTypeLayout.java",
     ]:
         if script.exists():
             record("OK", "Ghidra script present", str(script))
@@ -705,6 +706,30 @@ def export_macho_structure(
     dylib ordinal table, rpaths, encryption info, and entitlements.
     """
     from ghidra_re_skill.modules.exporter import export_macho_structure as _export
+
+    try:
+        result = _export(project, program or None, output)
+        _print_json(result)
+        if result.get("ok"):
+            console.print(f"[green]Wrote[/green] {result.get('output')}")
+    except Exception as e:
+        _die(str(e))
+
+
+@export_app.command("objc-layout")
+def export_objc_layout(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument("", help="Program name within the project (optional when --output given)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination JSON file (default: exports/<project>/<program>/objc_layout.json)."),
+) -> None:
+    """Export per-class ObjC ivar and method layout to objc_layout.json.
+
+    Runs ExportObjCTypeLayout.java via Ghidra headless. Walks __objc_classlist
+    and __objc_catlist, parsing class_ro_t / ivar_list_t / method_list_t for
+    every class defined in the binary. Outputs superclass chains, protocol
+    conformances, ivar offsets/types, and method selectors/imp addresses.
+    """
+    from ghidra_re_skill.modules.exporter import export_objc_layout as _export
 
     try:
         result = _export(project, program or None, output)

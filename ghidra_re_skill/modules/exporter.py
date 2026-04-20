@@ -60,3 +60,44 @@ def export_macho_structure(
     )
     result["output"] = str(out_path)
     return result
+
+
+def export_objc_layout(
+    project: str,
+    program: str | None = None,
+    output: str | None = None,
+) -> dict[str, Any]:
+    """Run ExportObjCTypeLayout.java and return the path to objc_layout.json.
+
+    Parameters
+    ----------
+    project:
+        Ghidra project name (must already exist under the workspace).
+    program:
+        Program name within the project.  Required when *output* is omitted.
+    output:
+        Explicit destination file path.  Auto-derived under
+        ``exports/<project>/<program>/objc_layout.json`` when omitted.
+    """
+    from ghidra_re_skill.modules.importer import run_script
+
+    if output:
+        out_path = Path(output)
+    elif program:
+        out_path = cfg.export_dir(project, program) / "objc_layout.json"
+    else:
+        raise RuntimeError(
+            "Either --output or program name must be provided to derive "
+            "the export destination path."
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    result = run_script(
+        script_name="ExportObjCTypeLayout.java",
+        project_name=project,
+        program_name=program,
+        script_args=[f"output={out_path}"],
+    )
+    result["output"] = str(out_path)
+    return result

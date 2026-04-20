@@ -27,6 +27,13 @@ Structure export scripts create additional files under the same program export d
     `memory_blocks`, `dylibs_from_ext_manager`, and optionally `entitlements_plist`.
     Produced by `ghidra-re export macho-structure <project> <program>`.
 
+- `objc_layout.json`
+  - Per-class ObjC structural layout: `class_addr`, `image_base_offset`, `flags`, `instance_start`,
+    `instance_size`, `superclass`, `superclass_chain`, `protocols`, `ivars` (name/type_encoding/
+    offset/size/alignment), `instance_methods` and `class_methods` (sel/imp_addr/types).
+    Top-level `categories` array with per-category instance/class methods and protocols.
+    Produced by `ghidra-re export objc-layout <project> <program>`.
+
 Targeted scripts create additional files such as:
 
 - `decompile_<function>.c`

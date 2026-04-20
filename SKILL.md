@@ -55,6 +55,9 @@ To install: `pip install -e /path/to/ghidra-re-skill`
    - `ghidra-re export macho-structure <project_name> <program_name>`
    - Output: `~/ghidra-projects/exports/<project>/<program>/macho_structure.json`
    - Pass `--output /path/to/file.json` to override the destination.
+10b. Export per-class ObjC ivar and method layout (superclass chains, protocol conformances, ivar offsets, method selectors/imp addresses, categories):
+   - `ghidra-re export objc-layout <project_name> <program_name>`
+   - Output: `~/ghidra-projects/exports/<project>/<program>/objc_layout.json`
 11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `ghidra-re bridge call /export/bug-hunt-bundle`
 12. Generate a function dossier for a top candidate:
