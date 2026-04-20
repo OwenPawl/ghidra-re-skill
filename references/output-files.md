@@ -17,6 +17,16 @@ Expected files:
 - `strings.json`
   - defined strings with block names and sampled xrefs
 
+Structure export scripts create additional files under the same program export directory:
+
+- `macho_structure.json`
+  - Mach-O binary metadata: `arch`, `filetype`, `flags`, `uuid`, `build_version` (platform/minos/sdk),
+    `source_version`, `encryption` (offset/size/id), `segments` (name/vm_addr/vm_size/file_off/file_size/
+    max_prot/init_prot + nested `sections` array), `dylibs` (ordinal/name/compatibility_version/
+    current_version/kind), `rpaths`, `sub_framework`, `code_signature_offset`, `code_signature_size`,
+    `memory_blocks`, `dylibs_from_ext_manager`, and optionally `entitlements_plist`.
+    Produced by `ghidra-re export macho-structure <project> <program>`.
+
 Targeted scripts create additional files such as:
 
 - `decompile_<function>.c`

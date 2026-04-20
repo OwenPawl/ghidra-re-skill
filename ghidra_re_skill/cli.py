@@ -7,6 +7,7 @@ Commands:
   mission     - mission management subcommands
   notes       - shared notes subcommands
   import      - import/analyze subcommands
+  export      - export Apple binary analysis artifacts
   plugins     - community plugin management (GhidraApple, etc.)
 """
 
@@ -29,6 +30,7 @@ bridge_app = typer.Typer(help="Bridge session management.", no_args_is_help=True
 mission_app = typer.Typer(help="Mission management.", no_args_is_help=True)
 notes_app = typer.Typer(help="Shared notes management.", no_args_is_help=True)
 import_app = typer.Typer(help="Import and analysis.", no_args_is_help=True)
+export_app = typer.Typer(help="Export Apple binary analysis artifacts.", no_args_is_help=True)
 publish_app = typer.Typer(help="Build share/install packages.", no_args_is_help=True)
 plugins_app = typer.Typer(help="Community Ghidra plugin management.", no_args_is_help=True)
 
@@ -36,6 +38,7 @@ app.add_typer(bridge_app, name="bridge")
 app.add_typer(mission_app, name="mission")
 app.add_typer(notes_app, name="notes")
 app.add_typer(import_app, name="import")
+app.add_typer(export_app, name="export")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(publish_app, name="publish")
 
@@ -292,6 +295,7 @@ def doctor() -> None:
         cfg.custom_scripts_dir / "ExportSinks.java",
         cfg.custom_scripts_dir / "TriageBugPaths.java",
         cfg.custom_scripts_dir / "ExportFunctionDossier.java",
+        cfg.custom_scripts_dir / "ExportMachOStructure.java",
     ]:
         if script.exists():
             record("OK", "Ghidra script present", str(script))
@@ -679,6 +683,34 @@ def import_run_script(
     try:
         result = run_script(script, project, program or None)
         _print_json(result)
+    except Exception as e:
+        _die(str(e))
+
+
+# ---------------------------------------------------------------------------
+# export subcommands
+# ---------------------------------------------------------------------------
+
+
+@export_app.command("macho-structure")
+def export_macho_structure(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument("", help="Program name within the project (optional when --output given)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination JSON file (default: exports/<project>/<program>/macho_structure.json)."),
+) -> None:
+    """Export Mach-O structural metadata to macho_structure.json.
+
+    Runs ExportMachOStructure.java via Ghidra headless and writes a JSON file
+    containing load commands, segments/sections, UUID, build/source versions,
+    dylib ordinal table, rpaths, encryption info, and entitlements.
+    """
+    from ghidra_re_skill.modules.exporter import export_macho_structure as _export
+
+    try:
+        result = _export(project, program or None, output)
+        _print_json(result)
+        if result.get("ok"):
+            console.print(f"[green]Wrote[/green] {result.get('output')}")
     except Exception as e:
         _die(str(e))
 

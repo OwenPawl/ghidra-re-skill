@@ -51,6 +51,10 @@ To install: `pip install -e /path/to/ghidra-re-skill`
    - `ghidra-re import analyze <binary|source:name:/path/in/image> [project_name]`
 10. Export the default Apple-focused bundle:
    - `ghidra-re bridge call /export/apple-bundle --project <project_name> --program <program_name>`
+10a. Export Mach-O structural metadata (load commands, segments, dylib table, UUID, versions, entitlements):
+   - `ghidra-re export macho-structure <project_name> <program_name>`
+   - Output: `~/ghidra-projects/exports/<project>/<program>/macho_structure.json`
+   - Pass `--output /path/to/file.json` to override the destination.
 11. Export the bug-hunt bundle only when the task is explicitly bug hunting or boundary triage:
    - `ghidra-re bridge call /export/bug-hunt-bundle`
 12. Generate a function dossier for a top candidate:
