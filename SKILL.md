@@ -29,6 +29,11 @@ To install: `pip install -e /path/to/ghidra-re-skill`
 > All commands use the `ghidra-re` CLI (installed via `pip install -e .`). Equivalent: `python -m ghidra_re_skill`.
 
 1. On a fresh machine, run `ghidra-re bootstrap` once.
+   - This installs the bridge extension **and** the GhidraApple community plugin automatically.
+   - After bootstrap, restart Ghidra and enable GhidraApple analyzers: **Analysis > Analyze All Open Files** (check the GhidraApple entries). This must be done once per project for the ObjC/msgSend/block enrichment to take effect.
+   - To skip plugin install: `ghidra-re bootstrap --skip-plugins-install`
+   - To install/reinstall the plugin separately: `ghidra-re plugins install ghidraapple`
+   - To check plugin status: `ghidra-re plugins status`
 2. If bootstrap cannot find Ghidra or Java 21, run `ghidra-re doctor`.
 3. On Windows, if the targets live in a mounted or extracted macOS image, register that source first:
    - `python -m ghidra_re_skill bridge call /source/add mac-image root=/d/macos-root platform=macos-image copy=cache`

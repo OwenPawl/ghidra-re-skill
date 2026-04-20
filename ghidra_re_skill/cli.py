@@ -7,6 +7,7 @@ Commands:
   mission     - mission management subcommands
   notes       - shared notes subcommands
   import      - import/analyze subcommands
+  plugins     - community plugin management (GhidraApple, etc.)
 """
 
 from __future__ import annotations
@@ -29,11 +30,13 @@ mission_app = typer.Typer(help="Mission management.", no_args_is_help=True)
 notes_app = typer.Typer(help="Shared notes management.", no_args_is_help=True)
 import_app = typer.Typer(help="Import and analysis.", no_args_is_help=True)
 publish_app = typer.Typer(help="Build share/install packages.", no_args_is_help=True)
+plugins_app = typer.Typer(help="Community Ghidra plugin management.", no_args_is_help=True)
 
 app.add_typer(bridge_app, name="bridge")
 app.add_typer(mission_app, name="mission")
 app.add_typer(notes_app, name="notes")
 app.add_typer(import_app, name="import")
+app.add_typer(plugins_app, name="plugins")
 app.add_typer(publish_app, name="publish")
 
 console = Console()
@@ -58,10 +61,11 @@ def _print_json(data: object) -> None:
 def bootstrap(
     skip_smoke_test: bool = typer.Option(False, "--skip-smoke-test", help="Skip analyzeHeadless smoke test."),
     skip_bridge_install: bool = typer.Option(False, "--skip-bridge-install", help="Skip bridge extension install."),
+    skip_plugins_install: bool = typer.Option(False, "--skip-plugins-install", help="Skip community plugin install (GhidraApple)."),
     no_write_config: bool = typer.Option(False, "--no-write-config", help="Do not write config file."),
     config_file: Optional[str] = typer.Option(None, "--config-file", help="Path to config file."),
 ) -> None:
-    """Detect Ghidra/JDK, create workspace, write config, optionally install bridge."""
+    """Detect Ghidra/JDK, create workspace, write config, install bridge + plugins."""
     from ghidra_re_skill.core.config import cfg
     from ghidra_re_skill.core.ghidra_locator import detect_ghidra_dir, detect_jdk_dir
 
@@ -119,11 +123,29 @@ def bootstrap(
         except Exception as e:
             _die(f"bridge install failed: {e}")
 
+    plugins_status_str = "skipped"
+    if not skip_plugins_install:
+        try:
+            from ghidra_re_skill.modules.plugins import install_ghidra_apple
+            result = install_ghidra_apple()
+            plugins_status_str = result.get("status", "installed")
+        except Exception as e:
+            # Non-fatal: plugins are useful but not required for basic operation.
+            plugins_status_str = f"failed ({e})"
+            console.print(f"[yellow]Warning:[/yellow] GhidraApple install failed: {e}")
+            console.print("[dim]Run 'ghidra-re plugins install' to retry.[/dim]")
+
     console.print(f"Skill root: {cfg.skill_root}")
     console.print(f"Ghidra: {detected_ghidra}")
     console.print(f"JDK: {detected_jdk}")
     console.print(f"Workspace: {workspace}")
     console.print(f"Bridge: {bridge_status}")
+    console.print(f"Plugins (GhidraApple): {plugins_status_str}")
+    if plugins_status_str in ("installed",):
+        console.print(
+            "[dim]Restart Ghidra and enable GhidraApple analyzers via "
+            "Analysis > Analyze All Open Files.[/dim]"
+        )
     console.print("[bold green]ghidra-re bootstrap complete[/bold green]")
 
 
@@ -688,6 +710,48 @@ def install_cmd(
         )
         for p in installed:
             console.print(f"install_skill: installed {p}")
+    except Exception as e:
+        _die(str(e))
+
+
+# ---------------------------------------------------------------------------
+# plugins subcommands
+# ---------------------------------------------------------------------------
+
+
+@plugins_app.command("install")
+def plugins_install(
+    plugin: str = typer.Argument("ghidraapple", help="Plugin to install (ghidraapple)."),
+    force: bool = typer.Option(False, "--force", help="Re-install even if already present."),
+    build_from_source: bool = typer.Option(
+        False, "--build-from-source",
+        help="Clone repo and build with Gradle instead of using the pre-built ZIP. "
+             "Requires git and Gradle on PATH.",
+    ),
+) -> None:
+    """Install a community Ghidra plugin."""
+    if plugin.lower().replace("-", "").replace("_", "") not in ("ghidraapple", "apple"):
+        _die(f"Unknown plugin '{plugin}'. Available: ghidraapple")
+    try:
+        from ghidra_re_skill.modules.plugins import install_ghidra_apple
+        result = install_ghidra_apple(force=force, build_from_source=build_from_source)
+        _print_json(result)
+        if result.get("status") == "already_installed":
+            console.print("[yellow]Already installed.[/yellow] Use --force to reinstall.")
+        elif result.get("ok"):
+            console.print("[bold green]GhidraApple installed.[/bold green]")
+            console.print(f"[dim]{result.get('note', '')}[/dim]")
+    except Exception as e:
+        _die(str(e))
+
+
+@plugins_app.command("status")
+def plugins_status() -> None:
+    """Show install status of all managed community plugins."""
+    try:
+        from ghidra_re_skill.modules.plugins import plugin_status
+        result = plugin_status()
+        _print_json(result)
     except Exception as e:
         _die(str(e))
 
