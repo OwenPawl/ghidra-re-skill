@@ -233,7 +233,7 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
   - Java-backed function fingerprint exports for `ghidra_diff`
   - Any other headless Ghidra export/decompile scripts used by the skill
 - Confirm Java/headless validation works on at least one small known-good binary before re-running it against WorkflowKit-scale targets
-- Status: ⬜ Pending; required final gate for Java-dependent phases
+- Status: ⬜ Blocked by local JVM startup crash. Re-tested Homebrew OpenJDK 21.0.11 and Homebrew OpenJDK 25.0.2; both crash with SIGBUS in `CodeHeap::allocate` before `java -version` completes. `/usr/bin/java` has no configured runtime, and `analyzeHeadless` still cannot prompt for a JDK in non-interactive mode. Required final gate for Java-dependent phases.
 
 ### 8.2 — Extensive live bridge use-case testing
 - Extensively test the live bridge before creating the next roadmap
@@ -338,10 +338,10 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 
 ## Current status
 
-- **Active:** Phase 4.3 coarse IPC graph milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Runtime-validate Frida and XPC traces once their target processes/dependencies are available; fix the Java/headless Ghidra block before the final Phase 8 gate
+- **Active:** Environment-gated Phase 8 validation; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
+- **Next:** Install or repair a stable JDK that can run `java -version`, then re-run Java-backed headless passes; install Frida before runtime-validating Phase 6 traces
 - **Final roadmap gate:** The next development roadmap should only be created after extensive live bridge and headless bridge use-case testing. That next roadmap is part of this roadmap’s continuation, not a separate effort.
-- **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
+- **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21/25 crashing with SIGBUS even on `java -version`; Frida runtime validation is blocked because Frida is not installed
 
 ---
 
@@ -361,3 +361,4 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | 2026-04-24 | Require full program-token matches for inferred XPC service ownership | Partial token matches over-link generic Shortcuts services; full-token matching correctly maps `com.apple.shortcuts.background-shortcut-runner` to BackgroundShortcutRunner without assigning unrelated services. |
 | 2026-04-24 | Land Frida as generated scripts with dry-run validation first | Frida is not installed locally, so the useful milestone is syntax-checked script generation plus wrappers that run when the dependency is present. |
 | 2026-04-24 | Keep generated XPC harnesses non-invasive by default | XPC services may require entitlements and valid protocol objects; generated clients configure the connection but leave remote calls as analyst-controlled TODOs. |
+| 2026-04-24 | Treat Java/headless completion as environment-blocked, not code-blocked | Homebrew OpenJDK 21.0.11 and 25.0.2 both crash in `CodeHeap::allocate` before startup, so Java-backed roadmap items cannot be honestly completed in this environment yet. |
