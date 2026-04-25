@@ -203,6 +203,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_generate_harness <enriched_trace.json> [target=<symbol|address>] [language=auto|objc|swift] [output=<path>]`  — generate a safe Swift/Objective-C harness skeleton from an enriched runtime hit
 - `scripts/ghidra_xpc_surface <project_name> <program_name> [output=<path>] [markdown_output=<path>]`  — recover XPC service, protocol, listener, and connection hints from existing export JSON
 - `scripts/ghidra_xpc_graph <project:program> [project:program ...] [output=<path>] [markdown_output=<path>]`  — merge per-binary XPC surface reports into a coarse IPC graph
+- `scripts/ghidra_xpc_trace <project_name> <program_name> attach_name=<process> [timeout=<s>] [max_hits=<n>] [dry_run=true]`  — trace common NSXPC setup calls through the LLDB trace backend
 11b. For runtime analysis of binaries you can launch or attach to, use the LLDB integration tools:
    - `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]` — extract the full symbol table (ObjC methods, trampolines, data symbols) from a Mach-O binary in 0.7 s using LLDB's static module loading. No process needed. Outputs `lldb_symbols.json`.
    - `scripts/ghidra_build_isa_map <project_name> <program_name>` — extract concrete `_OBJC_CLASS_$_...` and `_OBJC_METACLASS_$_...` addresses from `symbols.json` and save `isa_map.json` beside the export bundle. Use this before isa-aware LLDB traces so captured `objc_isa` values can be resolved offline.

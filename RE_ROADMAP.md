@@ -140,7 +140,7 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 ### 4.2 — Shell wrapper + live trace
 - `ghidra_xpc_surface <project_name> <program_name>` — static pass
 - `ghidra_xpc_trace` — LLDB trace targeting `NSXPCConnection` init + `invokeSelector:withArguments:` for live message capture
-- Status: ✅ `ghidra_xpc_surface` wrapper implemented and validated. ⬜ `ghidra_xpc_trace` live message capture pending.
+- Status: ✅ `ghidra_xpc_surface` wrapper implemented and validated. ✅ `ghidra_xpc_trace` wrapper implemented and dry-run validated as an LLDB trace delegate. ⬜ Live message capture still needs a target process run.
 
 ### 4.3 — IPC graph
 - Combine outputs across multiple analyzed binaries (shortcutsd, SVS, BSR, siriactionsd)
@@ -321,7 +321,7 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | `ghidra_scripts/ExportXPCSurface.java` | **New** Java; ⬜ blocked until Java/headless validation works | 4.1, 8.1 |
 | `ghidra_xpc_surface` | ✅ Built and validated for Python-first XPC surface reports from existing exports; ⬜ Java correlation pending | 4.2 |
 | `ghidra_xpc_graph` | ✅ Built and validated for coarse service ownership edges across XPC surface reports; ⬜ richer IPC graph semantics pending | 4.3 |
-| `ghidra_xpc_trace` | **New** shell + LLDB; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
+| `ghidra_xpc_trace` | ✅ Built and dry-run validated as an LLDB trace delegate; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
 | `ghidra_frida_trace` | **New** shell + JS; ⬜ needs live bridge use-case testing | 6.1, 8.2 |

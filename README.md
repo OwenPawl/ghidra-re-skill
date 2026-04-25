@@ -321,6 +321,15 @@ ghidra-re export xpc-graph workflowkit_full_dyld_extract:WorkflowKit bsr_smoke:B
 
 The graph pass auto-builds missing `xpc_surface.json` reports, then infers ownership edges by matching service names to target program names. For example, WorkflowKit references BackgroundShortcutRunner through `com.apple.shortcuts.background-shortcut-runner`.
 
+For live XPC setup tracing, use the LLDB-backed wrapper:
+
+```bash
+./scripts/ghidra_xpc_trace workflowkit_full_dyld_extract WorkflowKit attach_name=BackgroundShortcutRunner timeout=60 max_hits=25
+./scripts/ghidra_xpc_trace workflowkit_full_dyld_extract WorkflowKit dry_run=true
+```
+
+The wrapper delegates to `ghidra_lldb_trace` with default NSXPC connection/listener symbols, ObjC argument capture, and backtraces enabled. Use `dry_run=true` to inspect the exact delegated LLDB command before attaching to a process.
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.
