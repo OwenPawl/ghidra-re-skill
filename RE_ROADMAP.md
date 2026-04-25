@@ -183,12 +183,12 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 - Uses `ObjC.classes[className][selector].implementation` interception
 - Reads argument values as ObjC objects with `.toString()` — actual content, not heap pointers
 - Outputs same `lldb_trace_*.json` schema for compatibility with `ghidra_lldb_enrich`
-- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. ⬜ Runtime validation pending because Frida CLI/Python module is not installed locally.
+- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. Frida CLI/Python module validated in a throwaway venv. ⬜ Runtime attach validation is blocked by local macOS process-access denial on a small Objective-C fixture.
 
 ### 6.2 — Heap enumeration
 - `ghidra_frida_heap_scan <class_name>` — find all live instances of a class
 - Useful for finding WFAction subclass instances during shortcut execution
-- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. ⬜ Runtime validation pending because Frida CLI/Python module is not installed locally.
+- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. Frida CLI/Python module validated in a throwaway venv. ⬜ Runtime attach validation is blocked by local macOS process-access denial.
 
 ### 6.3 — Return value modification
 - `capture_returns=true` option in frida trace
@@ -327,8 +327,8 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | `ghidra_xpc_trace` | ✅ Built and dry-run validated as an LLDB trace delegate; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
-| `ghidra_frida_trace` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.1, 8.2 |
-| `ghidra_frida_heap_scan` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.2, 8.2 |
+| `ghidra_frida_trace` | ✅ Built and dry-run validated; ✅ Frida CLI/module validated in throwaway venv; ⬜ runtime attach blocked by local macOS process-access denial | 6.1, 8.2 |
+| `ghidra_frida_heap_scan` | ✅ Built and dry-run validated; ✅ Frida CLI/module validated in throwaway venv; ⬜ runtime attach blocked by local macOS process-access denial | 6.2, 8.2 |
 | `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces | 7.1 |
 | `ghidra_generate_xpc_harness` | ✅ Built and validated for Objective-C NSXPCConnection skeleton generation from XPC surface reports | 7.2 |
 | Bridge regression fixtures | **New** trace/export fixtures for live/headless consistency checks | 8.4 |
@@ -339,9 +339,9 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 ## Current status
 
 - **Active:** Environment-gated Phase 8 validation; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Install or repair a stable JDK that can run `java -version`, then re-run Java-backed headless passes; install Frida before runtime-validating Phase 6 traces
+- **Next:** Install or repair a stable JDK that can run `java -version`, then re-run Java-backed headless passes; resolve macOS Frida attach permissions before runtime-validating Phase 6 traces
 - **Final roadmap gate:** The next development roadmap should only be created after extensive live bridge and headless bridge use-case testing. That next roadmap is part of this roadmap’s continuation, not a separate effort.
-- **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21/25 crashing with SIGBUS even on `java -version`; Frida runtime validation is blocked because Frida is not installed
+- **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21/25 crashing with SIGBUS even on `java -version`; Frida runtime validation is blocked by local process attach denial
 
 ---
 
@@ -362,3 +362,4 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | 2026-04-24 | Land Frida as generated scripts with dry-run validation first | Frida is not installed locally, so the useful milestone is syntax-checked script generation plus wrappers that run when the dependency is present. |
 | 2026-04-24 | Keep generated XPC harnesses non-invasive by default | XPC services may require entitlements and valid protocol objects; generated clients configure the connection but leave remote calls as analyst-controlled TODOs. |
 | 2026-04-24 | Treat Java/headless completion as environment-blocked, not code-blocked | Homebrew OpenJDK 21.0.11 and 25.0.2 both crash in `CodeHeap::allocate` before startup, so Java-backed roadmap items cannot be honestly completed in this environment yet. |
+| 2026-04-24 | Treat Frida runtime validation as attach-permission blocked | Frida 17.9.1 works from a throwaway venv and `frida-ps` enumerates processes, but attaching to a local Objective-C fixture is denied by macOS process-access controls. |
