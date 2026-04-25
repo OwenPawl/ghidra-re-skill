@@ -312,6 +312,15 @@ ghidra-re export xpc-surface workflowkit_full_dyld_extract WorkflowKit --output 
 
 This Python-first pass does not require reopening Ghidra. It extracts probable mach services, XPC-related classes/protocols/selectors, listener methods, and connection methods from the existing Apple export bundle.
 
+To merge multiple XPC surface reports into a coarse IPC graph:
+
+```bash
+./scripts/ghidra_xpc_graph workflowkit_full_dyld_extract:WorkflowKit bsr_smoke:BackgroundShortcutRunner output=/tmp/shortcuts_xpc_graph.json markdown_output=/tmp/shortcuts_xpc_graph.md
+ghidra-re export xpc-graph workflowkit_full_dyld_extract:WorkflowKit bsr_smoke:BackgroundShortcutRunner --output /tmp/shortcuts_xpc_graph.json --markdown-output /tmp/shortcuts_xpc_graph.md
+```
+
+The graph pass auto-builds missing `xpc_surface.json` reports, then infers ownership edges by matching service names to target program names. For example, WorkflowKit references BackgroundShortcutRunner through `com.apple.shortcuts.background-shortcut-runner`.
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.

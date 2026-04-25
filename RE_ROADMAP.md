@@ -145,7 +145,7 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 ### 4.3 — IPC graph
 - Combine outputs across multiple analyzed binaries (shortcutsd, SVS, BSR, siriactionsd)
 - Render as adjacency map: `{ "BackgroundShortcutRunner": { "connects_to": ["shortcutsd"], "receives_from": ["ShortcutsViewService"] } }`
-- Status: ⬜ Pending; current XPC surface reports provide per-binary topology hints but do not yet merge cross-target adjacency.
+- Status: ✅ Initial graph merger implemented and validated on WorkflowKit + BackgroundShortcutRunner. It auto-builds missing `xpc_surface.json` reports and infers service ownership edges, including WorkflowKit → BackgroundShortcutRunner via `com.apple.shortcuts.background-shortcut-runner`. ⬜ Richer multi-target adjacency and message-type mapping remain pending.
 
 ---
 
@@ -320,6 +320,7 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | `ghidra_classify_small_functions` | **New** shell wrapper | 3.3 |
 | `ghidra_scripts/ExportXPCSurface.java` | **New** Java; ⬜ blocked until Java/headless validation works | 4.1, 8.1 |
 | `ghidra_xpc_surface` | ✅ Built and validated for Python-first XPC surface reports from existing exports; ⬜ Java correlation pending | 4.2 |
+| `ghidra_xpc_graph` | ✅ Built and validated for coarse service ownership edges across XPC surface reports; ⬜ richer IPC graph semantics pending | 4.3 |
 | `ghidra_xpc_trace` | **New** shell + LLDB; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
@@ -333,8 +334,8 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 
 ## Current status
 
-- **Active:** Phase 4.1/4.2 Python-first XPC surface milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Add cross-target IPC graph merging and live XPC tracing when enough per-binary XPC reports or LLDB traces are available; fix the Java/headless Ghidra block before the final Phase 8 gate
+- **Active:** Phase 4.3 coarse IPC graph milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
+- **Next:** Add live XPC tracing and richer message-type mapping; fix the Java/headless Ghidra block before the final Phase 8 gate
 - **Final roadmap gate:** The next development roadmap should only be created after extensive live bridge and headless bridge use-case testing. That next roadmap is part of this roadmap’s continuation, not a separate effort.
 - **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
@@ -353,3 +354,4 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | 2026-04-24 | Generate safe harness skeletons rather than auto-invoking private APIs | Enriched traces preserve observed pointers, but valid object construction is target-specific; generated calls stay commented until the analyst supplies safe fixtures. |
 | 2026-04-24 | Add Phase 8 as the bridge-hardening and next-roadmap handoff stage | The current roadmap should end by fixing the Java block, extensively testing live/headless bridge use cases, then creating the next roadmap as a direct continuation of this one. |
 | 2026-04-24 | Add a Python-first XPC surface pass before the planned Java extractor | Existing ObjC/string/symbol exports already expose useful XPC classes, services, protocols, and listener methods while Java headless validation remains blocked. |
+| 2026-04-24 | Require full program-token matches for inferred XPC service ownership | Partial token matches over-link generic Shortcuts services; full-token matching correctly maps `com.apple.shortcuts.background-shortcut-runner` to BackgroundShortcutRunner without assigning unrelated services. |

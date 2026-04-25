@@ -941,6 +941,31 @@ def export_xpc_surface(
         _die(str(e))
 
 
+@export_app.command("xpc-graph")
+def export_xpc_graph(
+    targets: list[str] = typer.Argument(..., help="Targets formatted as project:program."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination xpc_graph.json."),
+    markdown_output: Optional[str] = typer.Option(None, "--markdown-output", help="Destination xpc_graph.md."),
+) -> None:
+    """Merge per-binary XPC surface reports into a coarse IPC graph."""
+    from ghidra_re_skill.modules.xpc_graph import build_xpc_graph
+
+    try:
+        result = build_xpc_graph(
+            targets=targets,
+            output=output,
+            markdown_output=markdown_output,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} and {result['markdown_output']} "
+                f"({result['node_count']} nodes, {result['edge_count']} edges)"
+            )
+    except Exception as e:
+        _die(str(e))
+
+
 @export_app.command("lldb-enrich")
 def export_lldb_enrich(
     project: str = typer.Argument(..., help="Ghidra project name."),
