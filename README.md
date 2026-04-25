@@ -24,6 +24,7 @@
 - LLDB runtime trace capture and static enrichment back into Ghidra function context
 - Structural function-inventory diffs for comparing exported binaries across builds or OS versions
 - Trace-driven Swift/Objective-C harness skeleton generation from enriched runtime hits
+- XPC surface reports from existing ObjC/string/symbol export bundles
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
@@ -301,6 +302,15 @@ ghidra-re generate-harness ~/ghidra-projects/exports/workflowkit_full_dyld_extra
 ```
 
 The generated harness loads the target framework, records the observed function/symbol/address context, preserves argument-register pointers as comments/logs, and emits safe fuzzable placeholders. Calls are commented out until the placeholders are replaced with valid target-specific objects.
+
+To recover XPC topology hints from an existing export bundle:
+
+```bash
+./scripts/ghidra_xpc_surface workflowkit_full_dyld_extract WorkflowKit output=/tmp/workflowkit_xpc_surface.json markdown_output=/tmp/workflowkit_xpc_surface.md
+ghidra-re export xpc-surface workflowkit_full_dyld_extract WorkflowKit --output /tmp/workflowkit_xpc_surface.json --markdown-output /tmp/workflowkit_xpc_surface.md
+```
+
+This Python-first pass does not require reopening Ghidra. It extracts probable mach services, XPC-related classes/protocols/selectors, listener methods, and connection methods from the existing Apple export bundle.
 
 ## Notes
 

@@ -115,6 +115,7 @@ calls objc_msgSend + no other callers → objc_trampoline
 - Renames to `classified$<category>$<address>` or inlines where appropriate
 - Outputs classification report JSON
 - Operates as pass after `ResolveSwiftOutlined.java` (complements it, doesn't replace)
+- Status: ⬜ Pending; blocked until the Java/headless Ghidra runtime is fixed and validated
 
 ### 3.3 — Shell wrapper: `ghidra_classify_small_functions`
 ```bash
@@ -134,14 +135,17 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 - Finds: `NSXPCInterface interfaceWithProtocol:`, `NSXPCConnection alloc/init`, service name strings in `__cstring`
 - Exports: XPC endpoint names, protocol names, connection setup functions
 - Correlates with ObjC protocol list to find the actual method signatures
+- Status: ✅ Python-first extractor implemented and validated from existing `objc_metadata.json`, `strings.json`, and `symbols.json`; emits `xpc_surface.json` and `xpc_surface.md`. ⬜ Java instruction-level correlation remains pending.
 
 ### 4.2 — Shell wrapper + live trace
 - `ghidra_xpc_surface <project_name> <program_name>` — static pass
 - `ghidra_xpc_trace` — LLDB trace targeting `NSXPCConnection` init + `invokeSelector:withArguments:` for live message capture
+- Status: ✅ `ghidra_xpc_surface` wrapper implemented and validated. ⬜ `ghidra_xpc_trace` live message capture pending.
 
 ### 4.3 — IPC graph
 - Combine outputs across multiple analyzed binaries (shortcutsd, SVS, BSR, siriactionsd)
 - Render as adjacency map: `{ "BackgroundShortcutRunner": { "connects_to": ["shortcutsd"], "receives_from": ["ShortcutsViewService"] } }`
+- Status: ⬜ Pending; current XPC surface reports provide per-binary topology hints but do not yet merge cross-target adjacency.
 
 ---
 
@@ -211,6 +215,79 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 
 ---
 
+## Phase 8 — Bridge hardening and next-roadmap handoff
+*Final stage of this roadmap: fix the Java-dependent block, validate the bridges, then create the next roadmap as a direct continuation of this one.*
+
+**Gap:** The current roadmap reaches static/dynamic connection and harness generation, but the bridge layer still needs hardening before it can become the foundation for the next development cycle. The next roadmap should not be treated as a separate project; it should be the second-stage continuation of this roadmap after the initial bridge foundation is validated.
+
+### 8.1 — Fix the Java/headless Ghidra block
+- Resolve the current Java-dependent blocker where local OpenJDK 21 crashes with SIGBUS even on `java -version`
+- Make sure the Java block is fixed before treating this roadmap as complete
+- Re-test every Java-backed pass that is currently blocked, pending, or only partially validated:
+  - `DecompileFunction.java`
+  - `ClassifySmallFunctions.java`
+  - `ExportXPCSurface.java`
+  - Java-backed function fingerprint exports for `ghidra_diff`
+  - Any other headless Ghidra export/decompile scripts used by the skill
+- Confirm Java/headless validation works on at least one small known-good binary before re-running it against WorkflowKit-scale targets
+- Status: ⬜ Pending; required final gate for Java-dependent phases
+
+### 8.2 — Extensive live bridge use-case testing
+- Extensively test the live bridge before creating the next roadmap
+- Validate LLDB and Frida trace flows against realistic RE workflows, not only narrow success cases
+- Test live bridge behavior across:
+  - ObjC method tracing
+  - Swift/ObjC mixed call chains
+  - XPC connection setup
+  - argument capture
+  - return capture
+  - process attach timing
+  - timeout/failure handling
+  - repeated traces across the same target
+- Confirm live bridge output is stable enough to feed directly into enrichment, harness generation, and future automation
+- Status: ⬜ Pending
+
+### 8.3 — Extensive headless bridge use-case testing
+- Extensively test the headless bridge before creating the next roadmap
+- Validate Ghidra headless scripts, exports, enrichment, decompile pulling, classification, XPC surface extraction, and diff-related exports across realistic targets
+- Test headless bridge behavior across:
+  - small test binaries
+  - WorkflowKit-scale binaries
+  - ObjC-heavy binaries
+  - Swift-heavy binaries
+  - framework binaries
+  - app/executable binaries
+  - partial or malformed export bundles
+  - repeated runs over the same project
+- Confirm headless outputs are consistent, cacheable, debuggable, and compatible with the live bridge output schema
+- Status: ⬜ Pending
+
+### 8.4 — Bridge consistency check
+- Compare live bridge and headless bridge outputs for the same target and workflow
+- Confirm that runtime PCs, static addresses, slide computation, symbol names, class names, selectors, xrefs, and decompiled context line up correctly
+- Add regression fixtures for known-good traces and exports so future changes do not silently break the bridge
+- Status: ⬜ Pending
+
+### 8.5 — Create the next development roadmap
+- Create a second development roadmap only after the live bridge and headless bridge have been use-case tested extensively
+- Make it explicit that the second roadmap is part of this roadmap’s continuation, not a separate or unrelated plan
+- The next roadmap should start from the validated end state of this roadmap:
+  - live bridge tested
+  - headless bridge tested
+  - Java/headless block fixed
+  - harness generation validated
+  - unresolved items carried forward intentionally
+- The next roadmap should define the next layer of development: deeper automation, higher-level RE workflows, improved patch analysis, fuzzing/harness iteration, and analyst-facing UX
+- Status: ⬜ Pending; depends on Phase 8.1–8.4
+
+### 8.6 — Continue development on the new roadmap
+- After creating the next roadmap, continue implementation work on that new roadmap
+- Carry forward deferred work, unresolved blockers, bridge test findings, and stretch goals from this roadmap
+- Keep the same living-document style: update status inline as development progresses
+- Status: ⬜ Pending; begins after Phase 8.5
+
+---
+
 ## Implementation Order
 
 ```
@@ -219,9 +296,15 @@ Phase 0  →  Phase 1.2 (isa_map)  →  Phase 1.1 + 1.3  →  Phase 2  →  Phas
                                                                Phase 4  →  Phase 5
                                                                           ↓
                                                                Phase 6  →  Phase 7
+                                                                          ↓
+                                                               Phase 8  →  Next roadmap
+                                                                          ↓
+                                                        Continue development on next roadmap
 ```
 
 Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
+
+Phase 8 is the final gate for this roadmap. It must happen before the next roadmap is created. In particular, the live bridge and headless bridge should be use-case tested extensively before creating the next roadmap, and the next roadmap should be explicitly treated as the continuation of this roadmap. If you were told to finish this roadmap, that includes creating AND completing this continuation.
 
 ---
 
@@ -229,25 +312,30 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 
 | Script | Action | Phase |
 |--------|--------|-------|
-| `ghidra_lldb_trace` | ✅ Built for `capture_objc_class` + `capture_objc_args`; ⬜ live validation pending | 0, 1 |
+| `ghidra_lldb_trace` | ✅ Built for `capture_objc_class` + `capture_objc_args`; ⬜ live validation pending; needs broader live bridge use-case testing | 0, 1, 8.2 |
 | `ghidra_build_isa_map` | ✅ Built, ⬜ Runtime-consumer integration pending | 1.2 |
-| `ghidra_lldb_enrich` | ✅ Built and validated for slide + hit enrichment; ⬜ decompile/auto-apply pending | 2 |
-| `ghidra_scripts/ClassifySmallFunctions.java` | **New** Java | 3.2 |
+| `ghidra_lldb_enrich` | ✅ Built and validated for slide + hit enrichment; ⬜ decompile/auto-apply pending; needs bridge consistency testing | 2, 8.4 |
+| `ghidra_scripts/DecompileFunction.java` | Existing Java dependency; ⬜ must be re-tested after Java/headless block is fixed | 2.3, 8.1 |
+| `ghidra_scripts/ClassifySmallFunctions.java` | **New** Java; ⬜ blocked until Java/headless validation works | 3.2, 8.1 |
 | `ghidra_classify_small_functions` | **New** shell wrapper | 3.3 |
-| `ghidra_scripts/ExportXPCSurface.java` | **New** Java | 4.1 |
-| `ghidra_xpc_surface` | **New** shell wrapper | 4.2 |
-| `ghidra_xpc_trace` | **New** shell + LLDB | 4.2 |
+| `ghidra_scripts/ExportXPCSurface.java` | **New** Java; ⬜ blocked until Java/headless validation works | 4.1, 8.1 |
+| `ghidra_xpc_surface` | ✅ Built and validated for Python-first XPC surface reports from existing exports; ⬜ Java correlation pending | 4.2 |
+| `ghidra_xpc_trace` | **New** shell + LLDB; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
-| `ghidra_frida_trace` | **New** shell + JS | 6.1 |
-| `ghidra_frida_heap_scan` | **New** shell + JS | 6.2 |
+| Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
+| `ghidra_frida_trace` | **New** shell + JS; ⬜ needs live bridge use-case testing | 6.1, 8.2 |
+| `ghidra_frida_heap_scan` | **New** shell + JS; ⬜ needs live bridge use-case testing | 6.2, 8.2 |
 | `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces; ⬜ XPC variant pending | 7.1 |
+| Bridge regression fixtures | **New** trace/export fixtures for live/headless consistency checks | 8.4 |
+| Next development roadmap | **New** living roadmap document; must be created as the continuation of this roadmap | 8.5 |
 
 ---
 
 ## Current status
 
-- **Active:** Phase 7.1 harness generation milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Add XPC topology/harness support when Java headless validation is usable, or implement a Python-first live XPC trace path if LLDB artifacts are sufficient
+- **Active:** Phase 4.1/4.2 Python-first XPC surface milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
+- **Next:** Add cross-target IPC graph merging and live XPC tracing when enough per-binary XPC reports or LLDB traces are available; fix the Java/headless Ghidra block before the final Phase 8 gate
+- **Final roadmap gate:** The next development roadmap should only be created after extensive live bridge and headless bridge use-case testing. That next roadmap is part of this roadmap’s continuation, not a separate effort.
 - **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
 ---
@@ -263,3 +351,5 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | 2026-04-24 | Prefer function-inventory slide candidates when they map more hits than LLDB symbol candidates | Existing WorkflowKit artifacts have LLDB symbol and Ghidra inventory address bases that differ; scoring by mapped hit count produces the usable slide. |
 | 2026-04-24 | Implement Phase 5 diffing over existing function inventories before adding Java fingerprints | Local Java crashes block new headless Ghidra export passes, but existing JSON exports are sufficient for a useful structural diff milestone. |
 | 2026-04-24 | Generate safe harness skeletons rather than auto-invoking private APIs | Enriched traces preserve observed pointers, but valid object construction is target-specific; generated calls stay commented until the analyst supplies safe fixtures. |
+| 2026-04-24 | Add Phase 8 as the bridge-hardening and next-roadmap handoff stage | The current roadmap should end by fixing the Java block, extensively testing live/headless bridge use cases, then creating the next roadmap as a direct continuation of this one. |
+| 2026-04-24 | Add a Python-first XPC surface pass before the planned Java extractor | Existing ObjC/string/symbol exports already expose useful XPC classes, services, protocols, and listener methods while Java headless validation remains blocked. |

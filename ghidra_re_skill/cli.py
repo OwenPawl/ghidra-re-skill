@@ -908,6 +908,39 @@ def export_subsystem_clusters(
         _die(str(e))
 
 
+@export_app.command("xpc-surface")
+def export_xpc_surface(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    objc_metadata: Optional[str] = typer.Option(None, "--objc-metadata", help="Path to objc_metadata.json (auto-derived if omitted)."),
+    strings: Optional[str] = typer.Option(None, "--strings", help="Path to strings.json (auto-derived if omitted)."),
+    symbols: Optional[str] = typer.Option(None, "--symbols", help="Path to symbols.json (auto-derived if omitted)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination xpc_surface.json."),
+    markdown_output: Optional[str] = typer.Option(None, "--markdown-output", help="Destination xpc_surface.md."),
+) -> None:
+    """Recover XPC service, protocol, listener, and connection hints from exports."""
+    from ghidra_re_skill.modules.xpc_surface import build_xpc_surface
+
+    try:
+        result = build_xpc_surface(
+            project=project,
+            program=program,
+            objc_metadata_path=objc_metadata,
+            strings_path=strings,
+            symbols_path=symbols,
+            output=output,
+            markdown_output=markdown_output,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} and {result['markdown_output']} "
+                f"({result['service_name_count']} services, {result['xpc_protocol_count']} protocols)"
+            )
+    except Exception as e:
+        _die(str(e))
+
+
 @export_app.command("lldb-enrich")
 def export_lldb_enrich(
     project: str = typer.Argument(..., help="Ghidra project name."),
