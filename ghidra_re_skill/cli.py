@@ -741,6 +741,141 @@ def export_objc_layout(
         _die(str(e))
 
 
+@export_app.command("class-hierarchy")
+def export_class_hierarchy(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    objc_layout: Optional[str] = typer.Option(None, "--objc-layout", help="Path to objc_layout.json (auto-derived if omitted)."),
+    swift_layout: Optional[str] = typer.Option(None, "--swift-layout", help="Path to swift_layout.json (auto-derived if omitted)."),
+    output_json: Optional[str] = typer.Option(None, "--output-json", help="Destination class_hierarchy.json (auto-derived if omitted)."),
+    output_mmd: Optional[str] = typer.Option(None, "--output-mmd", help="Destination class_hierarchy.mmd (auto-derived if omitted)."),
+) -> None:
+    """Build class/type hierarchy from objc_layout.json + swift_layout.json.
+
+    Post-processes the output of 'ghidra-re export objc-layout' and
+    'ghidra-re export swift-layout' to produce a cross-language type graph.
+    Outputs class_hierarchy.json (nodes + edges + protocol conformance maps)
+    and class_hierarchy.mmd (Mermaid diagram capped at 120 nodes).
+    """
+    from ghidra_re_skill.modules.hierarchy import build_class_hierarchy
+
+    try:
+        result = build_class_hierarchy(
+            project=project,
+            program=program,
+            objc_layout_path=objc_layout,
+            swift_layout_path=swift_layout,
+            output_json=output_json,
+            output_mmd=output_mmd,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output_json']} "
+                f"({result['node_count']} nodes, {result['edge_count']} edges)"
+            )
+            console.print(f"[green]Wrote[/green] {result['output_mmd']}")
+    except Exception as e:
+        _die(str(e))
+
+
+@export_app.command("framework-graph")
+def export_framework_graph(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    macho_structure: Optional[str] = typer.Option(None, "--macho-structure", help="Path to macho_structure.json (auto-derived if omitted)."),
+    symbols: Optional[str] = typer.Option(None, "--symbols", help="Path to symbols.json (auto-derived if omitted)."),
+    output: Optional[str] = typer.Option(None, "--output", help="Destination framework_graph.json (auto-derived if omitted)."),
+    output_global: Optional[str] = typer.Option(None, "--output-global", help="Destination project-level framework_graph_global.json."),
+) -> None:
+    """Build a framework dependency graph from Mach-O metadata and symbol usage."""
+    from ghidra_re_skill.modules.frameworks import build_framework_graph
+
+    try:
+        result = build_framework_graph(
+            project=project,
+            program=program,
+            macho_structure_path=macho_structure,
+            symbols_path=symbols,
+            output=output,
+            output_global=output_global,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(f"[green]Wrote[/green] {result['output']}")
+            console.print(f"[green]Wrote[/green] {result['output_global']}")
+    except Exception as e:
+        _die(str(e))
+
+
+@export_app.command("subsystem-clusters")
+def export_subsystem_clusters(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    function_inventory: Optional[str] = typer.Option(None, "--function-inventory", help="Path to function_inventory.json (auto-derived if omitted)."),
+    objc_layout: Optional[str] = typer.Option(None, "--objc-layout", help="Path to objc_layout.json (auto-derived if omitted)."),
+    output: Optional[str] = typer.Option(None, "--output", help="Destination subsystem_clusters.json (auto-derived if omitted)."),
+    min_prefix_size: int = typer.Option(3, "--min-prefix-size", help="Minimum shared prefix size to form a cluster."),
+    no_xref_communities: bool = typer.Option(False, "--no-xref-communities", help="Disable NetworkX-based xref community detection."),
+) -> None:
+    """Group functions into subsystem clusters from function inventory and ObjC layout."""
+    from ghidra_re_skill.modules.clusters import build_subsystem_clusters
+
+    try:
+        result = build_subsystem_clusters(
+            project=project,
+            program=program,
+            function_inventory_path=function_inventory,
+            objc_layout_path=objc_layout,
+            output=output,
+            min_prefix_size=min_prefix_size,
+            use_xref_communities=not no_xref_communities,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} "
+                f"({result['cluster_count']} clusters from {result['total_functions']} functions)"
+            )
+    except Exception as e:
+        _die(str(e))
+
+
+@export_app.command("lldb-enrich")
+def export_lldb_enrich(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    trace_json: str = typer.Argument(..., help="LLDB trace JSON to enrich."),
+    function_inventory: Optional[str] = typer.Option(None, "--function-inventory", help="Path to function_inventory.json (auto-derived if omitted)."),
+    lldb_symbols: Optional[str] = typer.Option(None, "--lldb-symbols", help="Path to lldb_symbols.json (auto-derived if omitted)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination enriched trace JSON."),
+    known_runtime_pc: Optional[str] = typer.Option(None, "--known-runtime-pc", help="Manual runtime PC for slide calculation."),
+    known_static_addr: Optional[str] = typer.Option(None, "--known-static-addr", help="Matching static/Ghidra address for slide calculation."),
+) -> None:
+    """Enrich LLDB trace hits with Ghidra addresses and function context."""
+    from ghidra_re_skill.modules.lldb_enrich import enrich_lldb_trace
+
+    try:
+        result = enrich_lldb_trace(
+            project=project,
+            program=program,
+            trace_path=trace_json,
+            function_inventory_path=function_inventory,
+            lldb_symbols_path=lldb_symbols,
+            output=output,
+            known_runtime_pc=known_runtime_pc,
+            known_static_addr=known_static_addr,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} "
+                f"({result['matched_function_count']}/{result['hit_count']} hits mapped)"
+            )
+    except Exception as e:
+        _die(str(e))
+
+
 @export_app.command("swift-layout")
 def export_swift_layout(
     project: str = typer.Argument(..., help="Ghidra project name."),

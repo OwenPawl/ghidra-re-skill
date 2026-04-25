@@ -72,7 +72,9 @@ def export_env() -> dict[str, str]:
     path_sep = ";" if sys.platform == "win32" else ":"
     new_path = str(Path(java_home) / "bin") + path_sep + os.environ.get("PATH", "")
     return {
+        "GHIDRA_JDK": java_home,
         "JAVA_HOME": java_home,
+        "JAVA_HOME_OVERRIDE": java_home,
         "PATH": new_path,
         "GHIDRA_INSTALL_DIR": str(cfg.ghidra_install_dir),
     }

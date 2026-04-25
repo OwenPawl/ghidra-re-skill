@@ -21,6 +21,7 @@
 - Headless import and analysis helpers
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
 - Richer Swift exports with demangled alias maps, metadata-section recovery, and surface-level type reports
+- LLDB runtime trace capture and static enrichment back into Ghidra function context
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
@@ -270,6 +271,16 @@ For ObjC-heavy Apple frameworks or mixed Swift/ObjC subsystems, prefer:
 ```
 
 Those helpers merge the richer `symbols.json` ObjC method surface with `objc_metadata.json`, so imported-style methods like `-[WFRemoteExecutionCoordinator_handleRunRequest:...]` still show up even when the flatter metadata method bucket is incomplete. `ghidra_objc_message_flow` builds on top of that by grouping receiver classes, sibling selectors, and live sender hints when a bridge session is available.
+
+For runtime traces, capture symbols with LLDB and enrich the resulting PCs back into the static model:
+
+```bash
+./scripts/ghidra_lldb_symbols /path/to/WorkflowKit workflowkit_full_dyld_extract WorkflowKit
+./scripts/ghidra_lldb_trace workflowkit_full_dyld_extract WorkflowKit attach_name=BackgroundShortcutRunner symbols='-[WFAction runWithInput:userInterface:runningDelegate:variableSource:workQueue:completionHandler:]' capture_objc_args=true timeout=90
+./scripts/ghidra_lldb_enrich workflowkit_full_dyld_extract WorkflowKit ~/ghidra-projects/exports/workflowkit_full_dyld_extract/WorkflowKit/lldb_trace_<timestamp>.json
+```
+
+The Python CLI equivalent for the last step is `ghidra-re export lldb-enrich <project> <program> <trace_json>`.
 
 ## Notes
 

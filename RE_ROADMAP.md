@@ -67,25 +67,30 @@ The skill currently covers discover + understand well, observe partially (LLDB c
 - Method: find any named hit whose symbol appears in `lldb_symbols.json` → `slide = runtime_pc - static_addr`
 - Fallback: ask user to provide one known-good mapping
 - Output: `{ "slide": 0x168017e0, "confidence": "high" }`
+- Status: ✅ Implemented in `ghidra_lldb_enrich`; validated on WorkflowKit trace with high-confidence slide
 
 ### 2.2 — PC → Ghidra address mapping
 - Apply slide to all hit PCs: `ghidra_addr = runtime_pc - slide`
 - Look up each ghidra_addr in `function_inventory.json` by address
 - Annotate each hit with: function name, address, size, caller count, category tags
+- Status: ✅ Implemented and validated on WorkflowKit trace (`5/5` hits mapped)
 
 ### 2.3 — Per-hit decompile pull
 - For each unique hit function, run `DecompileFunction.java` headlessly
 - Attach decompiled pseudocode to the enriched hit record
 - Cache by ghidra_addr so repeated runs don't re-decompile
+- Status: ⬜ Pending; blocked locally until the configured OpenJDK stops crashing under headless validation
 
 ### 2.4 — Xref context
 - For each hit function, pull callers and callees from `function_inventory.json`
 - Attach top-5 callers / callees to hit record
+- Status: ✅ Implemented from function inventory caller/callee counts and sampled references
 
 ### 2.5 — Output + auto-apply
 - Writes `lldb_trace_<timestamp>_enriched.json`
 - Optionally calls `ghidra_apply_finding` for each hit (comment = "Observed at runtime, N hits, concrete class: X")
 - Shell + Python only, no new Java
+- Status: ✅ Enriched JSON output implemented; ⬜ auto-apply still pending
 
 ---
 
@@ -221,7 +226,7 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 |--------|--------|-------|
 | `ghidra_lldb_trace` | ✅ Built for `capture_objc_class` + `capture_objc_args`; ⬜ live validation pending | 0, 1 |
 | `ghidra_build_isa_map` | ✅ Built, ⬜ Runtime-consumer integration pending | 1.2 |
-| `ghidra_lldb_enrich` | **New** shell + Python | 2 |
+| `ghidra_lldb_enrich` | ✅ Built and validated for slide + hit enrichment; ⬜ decompile/auto-apply pending | 2 |
 | `ghidra_scripts/ClassifySmallFunctions.java` | **New** Java | 3.2 |
 | `ghidra_classify_small_functions` | **New** shell wrapper | 3.3 |
 | `ghidra_scripts/ExportXPCSurface.java` | **New** Java | 4.1 |
@@ -236,9 +241,9 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 
 ## Current status
 
-- **Active:** Phase 0 live validation
-- **Next:** Validate `capture_objc_class` / `capture_objc_args` on BSR and confirm `self_class` + `selector` fields are present in trace hits
-- **Blocked:** nothing currently
+- **Active:** Phase 2 completion + Phase 0 live validation
+- **Next:** Add Java-dependent decompile cache once local JDK is usable; validate `capture_objc_class` / `capture_objc_args` on BSR when a live BSR run is available
+- **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
 ---
 
@@ -250,3 +255,4 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | 2026-04-12 | `ghidra_lldb_enrich` before `classify_small_functions` | Enrich closes the dynamic/static gap which informs what small functions are actually interesting |
 | 2026-04-12 | Phase 4 (XPC) before Phase 5 (diff) | XPC discovery is architectural — more sessions will need it; diff is more situational |
 | 2026-04-12 | Frida deferred to Phase 6 | LLDB is working for BSR (get-task-allow present); Frida setup cost only justified when SIP blocks LLDB |
+| 2026-04-24 | Prefer function-inventory slide candidates when they map more hits than LLDB symbol candidates | Existing WorkflowKit artifacts have LLDB symbol and Ghidra inventory address bases that differ; scoring by mapped hit count produces the usable slide. |
