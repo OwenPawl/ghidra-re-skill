@@ -1,7 +1,7 @@
 # Ghidra RE Skill — Implementation Roadmap
 
 > Living document. Update status inline as work progresses.
-> Last updated: 2026-04-12
+> Last updated: 2026-04-24
 
 ---
 
@@ -153,15 +153,18 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 ### 5.1 — Function fingerprinting
 - Hash each function by: instruction mnemonic sequence (no operands) — captures structure without ASLR sensitivity
 - Store in `function_fingerprints.json` alongside normal export
+- Status: ⬜ Pending; requires a Java export pass once local headless Ghidra/JDK validation is usable
 
 ### 5.2 — `ghidra_diff <project_a> <program_a> <project_b> <program_b>`
 - Aligns functions by name (exact match), then by fingerprint similarity
 - Outputs: added, removed, modified functions with before/after decompile for modified ones
 - Highlights functions whose xref graph changed (new callers/callees)
+- Status: ✅ Structural diff implemented and validated from existing `function_inventory.json` exports; duplicate function names are preserved and disambiguated by entry or structural metadata. ⬜ Fingerprint similarity and before/after decompile attachment remain pending.
 
 ### 5.3 — Patch analysis report
 - Classify diffs: security-relevant (new validation, removed check, new sanitizer) vs structural (refactor, rename)
 - Heuristics: removed bounds check → flag, added error return path → flag, new ObjC method on existing class → flag
+- Status: ✅ Basic patch-relevance scoring implemented for name terms, body-size deltas, callee-count changes, and interface changes. ⬜ Full semantic patch classification remains pending.
 
 ---
 
@@ -232,7 +235,7 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | `ghidra_scripts/ExportXPCSurface.java` | **New** Java | 4.1 |
 | `ghidra_xpc_surface` | **New** shell wrapper | 4.2 |
 | `ghidra_xpc_trace` | **New** shell + LLDB | 4.2 |
-| `ghidra_diff` | **New** shell + Python | 5.2 |
+| `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | `ghidra_frida_trace` | **New** shell + JS | 6.1 |
 | `ghidra_frida_heap_scan` | **New** shell + JS | 6.2 |
 | `ghidra_generate_harness` | **New** shell + Python | 7.1 |
@@ -241,8 +244,8 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 
 ## Current status
 
-- **Active:** Phase 2 completion + Phase 0 live validation
-- **Next:** Add Java-dependent decompile cache once local JDK is usable; validate `capture_objc_class` / `capture_objc_args` on BSR when a live BSR run is available
+- **Active:** Phase 5 structural diffing milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
+- **Next:** Use Python-only artifacts for Phase 7 harness generation while Java-dependent Phase 3, Phase 4 static XPC, Phase 5 fingerprints, and Phase 2 decompile cache wait on a stable JDK
 - **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
 ---
@@ -256,3 +259,4 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | 2026-04-12 | Phase 4 (XPC) before Phase 5 (diff) | XPC discovery is architectural — more sessions will need it; diff is more situational |
 | 2026-04-12 | Frida deferred to Phase 6 | LLDB is working for BSR (get-task-allow present); Frida setup cost only justified when SIP blocks LLDB |
 | 2026-04-24 | Prefer function-inventory slide candidates when they map more hits than LLDB symbol candidates | Existing WorkflowKit artifacts have LLDB symbol and Ghidra inventory address bases that differ; scoring by mapped hit count produces the usable slide. |
+| 2026-04-24 | Implement Phase 5 diffing over existing function inventories before adding Java fingerprints | Local Java crashes block new headless Ghidra export passes, but existing JSON exports are sufficient for a useful structural diff milestone. |

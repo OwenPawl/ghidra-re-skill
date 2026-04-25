@@ -22,6 +22,7 @@
 - Structured exports for functions, strings, symbols, Objective-C metadata, and xrefs
 - Richer Swift exports with demangled alias maps, metadata-section recovery, and surface-level type reports
 - LLDB runtime trace capture and static enrichment back into Ghidra function context
+- Structural function-inventory diffs for comparing exported binaries across builds or OS versions
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
@@ -281,6 +282,15 @@ For runtime traces, capture symbols with LLDB and enrich the resulting PCs back 
 ```
 
 The Python CLI equivalent for the last step is `ghidra-re export lldb-enrich <project> <program> <trace_json>`.
+
+To compare two exported binaries without reopening Ghidra, diff their latest `function_inventory.json` files:
+
+```bash
+./scripts/ghidra_diff workflowkit_full_dyld_extract WorkflowKit workflowkit_dyld_arm64e_macos WorkflowKit output=/tmp/workflowkit_diff.json
+ghidra-re diff workflowkit_full_dyld_extract WorkflowKit workflowkit_dyld_arm64e_macos WorkflowKit --output /tmp/workflowkit_diff.json
+```
+
+The current diff aligns by function name and disambiguates duplicate names by entry or structural metadata. It reports added, removed, modified, and unchanged functions plus a lightweight patch-relevance score. Instruction-mnemonic fingerprints and decompile comparisons are planned once headless Ghidra/JDK validation is available.
 
 ## Notes
 

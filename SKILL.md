@@ -199,6 +199,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]`  — static symbol inventory via LLDB (ObjC methods, trampolines, etc.)
 - `scripts/ghidra_lldb_trace <project_name> <program_name> launch_cmd=<bin> symbols=<syms> [max_hits=100] [timeout=30] [capture_args=true] [capture_backtrace=false] [capture_objc_args=true]`  — runtime breakpoint trace, captures arg registers and optional ObjC self/selector context
 - `scripts/ghidra_lldb_enrich <project_name> <program_name> <lldb_trace.json> [output=<path>]`  — enrich runtime hits with Ghidra addresses, function metadata, and xref context
+- `scripts/ghidra_diff <project_a> <program_a> <project_b> <program_b> [output=<path>]`  — compare exported `function_inventory.json` files and rank structurally interesting changes
 11b. For runtime analysis of binaries you can launch or attach to, use the LLDB integration tools:
    - `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]` — extract the full symbol table (ObjC methods, trampolines, data symbols) from a Mach-O binary in 0.7 s using LLDB's static module loading. No process needed. Outputs `lldb_symbols.json`.
    - `scripts/ghidra_build_isa_map <project_name> <program_name>` — extract concrete `_OBJC_CLASS_$_...` and `_OBJC_METACLASS_$_...` addresses from `symbols.json` and save `isa_map.json` beside the export bundle. Use this before isa-aware LLDB traces so captured `objc_isa` values can be resolved offline.
@@ -211,6 +212,7 @@ Run these wrappers from the skill directory:
   - `ghidra-re export class-hierarchy <project_name> <program_name>` — build `class_hierarchy.json` and `class_hierarchy.mmd` from ObjC and Swift layout exports.
   - `ghidra-re export framework-graph <project_name> <program_name>` — build per-program and project-level framework dependency graphs.
   - `ghidra-re export subsystem-clusters <project_name> <program_name>` — group functions by ObjC class, name prefix, and optional xref communities.
+  - `ghidra-re diff <project_a> <program_a> <project_b> <program_b>` — compare function inventories by name, disambiguate duplicate labels by entry or structure, and emit added/removed/modified summaries.
 - `scripts/ghidra_swift_surface_report <project_name> <program_name> [query] [format=json|markdown]`
 - `scripts/ghidra_describe_swift_type <project_name> <program_name> <type_query>`
 - `scripts/ghidra_objc_surface_report <project_name> <program_name> [format=json|markdown]`

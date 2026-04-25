@@ -8,6 +8,7 @@ Commands:
   notes       - shared notes subcommands
   import      - import/analyze subcommands
   export      - export Apple binary analysis artifacts
+  diff        - compare two exported function inventories
   plugins     - community plugin management (GhidraApple, etc.)
 """
 
@@ -53,6 +54,40 @@ def _die(msg: str) -> None:
 
 def _print_json(data: object) -> None:
     console.print_json(json.dumps(data, indent=2, default=str))
+
+
+@app.command("diff")
+def diff_cmd(
+    project_a: str = typer.Argument(..., help="Left Ghidra project name."),
+    program_a: str = typer.Argument(..., help="Left program name."),
+    project_b: str = typer.Argument(..., help="Right Ghidra project name."),
+    program_b: str = typer.Argument(..., help="Right program name."),
+    function_inventory_a: Optional[str] = typer.Option(None, "--function-inventory-a", help="Override left function_inventory.json."),
+    function_inventory_b: Optional[str] = typer.Option(None, "--function-inventory-b", help="Override right function_inventory.json."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination diff JSON."),
+) -> None:
+    """Compare two Ghidra export bundles."""
+    from ghidra_re_skill.modules.diffing import diff_exports
+
+    try:
+        result = diff_exports(
+            project_a=project_a,
+            program_a=program_a,
+            project_b=project_b,
+            program_b=program_b,
+            function_inventory_a=function_inventory_a,
+            function_inventory_b=function_inventory_b,
+            output=output,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} "
+                f"({result['added_count']} added, {result['removed_count']} removed, "
+                f"{result['modified_count']} modified)"
+            )
+    except Exception as e:
+        _die(str(e))
 
 
 # ---------------------------------------------------------------------------
