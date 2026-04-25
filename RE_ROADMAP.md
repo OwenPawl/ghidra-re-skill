@@ -183,14 +183,17 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 - Uses `ObjC.classes[className][selector].implementation` interception
 - Reads argument values as ObjC objects with `.toString()` — actual content, not heap pointers
 - Outputs same `lldb_trace_*.json` schema for compatibility with `ghidra_lldb_enrich`
+- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. ⬜ Runtime validation pending because Frida CLI/Python module is not installed locally.
 
 ### 6.2 — Heap enumeration
 - `ghidra_frida_heap_scan <class_name>` — find all live instances of a class
 - Useful for finding WFAction subclass instances during shortcut execution
+- Status: ✅ Script generator/wrapper implemented and dry-run validated; generated JavaScript passes syntax checks. ⬜ Runtime validation pending because Frida CLI/Python module is not installed locally.
 
 ### 6.3 — Return value modification
 - `capture_returns=true` option in frida trace
 - Enable fuzzing of specific arguments by intercepting and swapping values
+- Status: ✅ Return capture script path implemented via `capture_returns=true`. ⬜ Argument/return modification remains pending and requires runtime Frida validation.
 
 ---
 
@@ -324,8 +327,8 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | `ghidra_xpc_trace` | ✅ Built and dry-run validated as an LLDB trace delegate; ⬜ needs live bridge use-case testing | 4.2, 8.2 |
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
-| `ghidra_frida_trace` | **New** shell + JS; ⬜ needs live bridge use-case testing | 6.1, 8.2 |
-| `ghidra_frida_heap_scan` | **New** shell + JS; ⬜ needs live bridge use-case testing | 6.2, 8.2 |
+| `ghidra_frida_trace` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.1, 8.2 |
+| `ghidra_frida_heap_scan` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.2, 8.2 |
 | `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces; ⬜ XPC variant pending | 7.1 |
 | Bridge regression fixtures | **New** trace/export fixtures for live/headless consistency checks | 8.4 |
 | Next development roadmap | **New** living roadmap document; must be created as the continuation of this roadmap | 8.5 |
@@ -335,7 +338,7 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 ## Current status
 
 - **Active:** Phase 4.3 coarse IPC graph milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Add live XPC tracing and richer message-type mapping; fix the Java/headless Ghidra block before the final Phase 8 gate
+- **Next:** Runtime-validate Frida and XPC traces once their target processes/dependencies are available; fix the Java/headless Ghidra block before the final Phase 8 gate
 - **Final roadmap gate:** The next development roadmap should only be created after extensive live bridge and headless bridge use-case testing. That next roadmap is part of this roadmap’s continuation, not a separate effort.
 - **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
@@ -355,3 +358,4 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | 2026-04-24 | Add Phase 8 as the bridge-hardening and next-roadmap handoff stage | The current roadmap should end by fixing the Java block, extensively testing live/headless bridge use cases, then creating the next roadmap as a direct continuation of this one. |
 | 2026-04-24 | Add a Python-first XPC surface pass before the planned Java extractor | Existing ObjC/string/symbol exports already expose useful XPC classes, services, protocols, and listener methods while Java headless validation remains blocked. |
 | 2026-04-24 | Require full program-token matches for inferred XPC service ownership | Partial token matches over-link generic Shortcuts services; full-token matching correctly maps `com.apple.shortcuts.background-shortcut-runner` to BackgroundShortcutRunner without assigning unrelated services. |
+| 2026-04-24 | Land Frida as generated scripts with dry-run validation first | Frida is not installed locally, so the useful milestone is syntax-checked script generation plus wrappers that run when the dependency is present. |

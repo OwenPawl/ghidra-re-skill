@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# ghidra_frida_trace
+#
+# Generate and optionally run a Frida ObjC method trace script.
+#
+# Usage:
+#   ghidra_frida_trace <project_name> <program_name> <key=value ...>
+#
+# Key=value arguments:
+#   process=<name>              Process name for frida -n.
+#   symbols=<sym1,sym2,...>     ObjC method symbols, e.g. -[WFAction runWithInput:error:].
+#   script_output=<path>        Destination .js path.
+#   output=<path>               Destination Frida stdout log when running.
+#   capture_returns=true        Capture return values. Default: false.
+#   dry_run=true                Generate the JS and print metadata without running Frida.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+  sed -n '3,17p' "$0"
+}
+
+[[ $# -ge 2 ]] || {
+  usage >&2
+  exit 1
+}
+
+project="$1"
+program="$2"
+shift 2
+
+process=""
+symbols=""
+script_output=""
+output=""
+capture_returns="false"
+dry_run="false"
+
+for arg in "$@"; do
+  case "$arg" in
+    process=*)         process="${arg#process=}" ;;
+    symbols=*)         symbols="${arg#symbols=}" ;;
+    script_output=*)   script_output="${arg#script_output=}" ;;
+    output=*)          output="${arg#output=}" ;;
+    capture_returns=*) capture_returns="${arg#capture_returns=}" ;;
+    dry_run=*)         dry_run="${arg#dry_run=}" ;;
+    *) printf 'ghidra-re: warning: unknown argument: %s\n' "$arg" >&2 ;;
+  esac
+done
+
+[[ -n "$symbols" ]] || {
+  usage >&2
+  exit 1
+}
+
+if [[ -z "$script_output" ]]; then
+  script_output="/tmp/ghidra_frida_trace_${project}_${program}.js"
+fi
+
+PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 - "$symbols" "$script_output" "$capture_returns" <<'PY'
+import json
+import sys
+
+from ghidra_re_skill.modules.frida_scripts import generate_frida_trace_script
+
+symbols, script_output, capture_returns = sys.argv[1:4]
+result = generate_frida_trace_script(
+    symbols=symbols,
+    output=script_output,
+    capture_returns=capture_returns.lower() == "true",
+)
+print(json.dumps(result, indent=2))
+PY
+
+if [[ "$dry_run" == "true" ]]; then
+  exit 0
+fi
+
+command -v frida >/dev/null 2>&1 || {
+  printf 'ghidra-re: frida CLI not found; generated script only: %s\n' "$script_output" >&2
+  exit 2
+}
+[[ -n "$process" ]] || {
+  printf 'ghidra-re: process=<name> is required when dry_run=false\n' >&2
+  exit 1
+}
+
+if [[ -n "$output" ]]; then
+  frida -n "$process" -l "$script_output" --runtime=v8 | tee "$output"
+else
+  frida -n "$process" -l "$script_output" --runtime=v8
+fi

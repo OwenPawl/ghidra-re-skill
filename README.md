@@ -330,6 +330,15 @@ For live XPC setup tracing, use the LLDB-backed wrapper:
 
 The wrapper delegates to `ghidra_lldb_trace` with default NSXPC connection/listener symbols, ObjC argument capture, and backtraces enabled. Use `dry_run=true` to inspect the exact delegated LLDB command before attaching to a process.
 
+For Frida-based tracing on systems where Frida is installed:
+
+```bash
+./scripts/ghidra_frida_trace workflowkit_full_dyld_extract WorkflowKit symbols='-[WFAction runWithInput:userInterface:runningDelegate:variableSource:workQueue:completionHandler:]' process=BackgroundShortcutRunner capture_returns=true
+./scripts/ghidra_frida_heap_scan WFAction process=BackgroundShortcutRunner
+```
+
+Both wrappers support `dry_run=true`, which generates Frida JavaScript without requiring the local Frida CLI. Generated events are emitted with `GHIDRA_FRIDA_*` prefixes for downstream parsing.
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.
