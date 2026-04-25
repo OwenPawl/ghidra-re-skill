@@ -9,6 +9,7 @@ Commands:
   import      - import/analyze subcommands
   export      - export Apple binary analysis artifacts
   diff        - compare two exported function inventories
+  generate-harness - create source harnesses from enriched traces
   plugins     - community plugin management (GhidraApple, etc.)
 """
 
@@ -85,6 +86,37 @@ def diff_cmd(
                 f"[green]Wrote[/green] {result['output']} "
                 f"({result['added_count']} added, {result['removed_count']} removed, "
                 f"{result['modified_count']} modified)"
+            )
+    except Exception as e:
+        _die(str(e))
+
+
+@app.command("generate-harness")
+def generate_harness_cmd(
+    trace_json: str = typer.Argument(..., help="Enriched LLDB trace JSON."),
+    target: Optional[str] = typer.Argument(None, help="Function name, symbol, runtime PC, or Ghidra address to target."),
+    language: str = typer.Option("auto", "--language", "-l", help="Harness language: auto, objc, or swift."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination .m or .swift file."),
+    framework: Optional[str] = typer.Option(None, "--framework", help="Framework name to load (default: trace program)."),
+    bundle_path: Optional[str] = typer.Option(None, "--bundle-path", help="Framework bundle path to load."),
+) -> None:
+    """Generate a source harness from an enriched LLDB trace."""
+    from ghidra_re_skill.modules.harness import generate_harness
+
+    try:
+        result = generate_harness(
+            trace_path=trace_json,
+            target=target,
+            language=language,
+            output=output,
+            framework=framework,
+            bundle_path=bundle_path,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(
+                f"[green]Wrote[/green] {result['output']} "
+                f"({result['language']} harness for {result['target']})"
             )
     except Exception as e:
         _die(str(e))

@@ -23,6 +23,7 @@
 - Richer Swift exports with demangled alias maps, metadata-section recovery, and surface-level type reports
 - LLDB runtime trace capture and static enrichment back into Ghidra function context
 - Structural function-inventory diffs for comparing exported binaries across builds or OS versions
+- Trace-driven Swift/Objective-C harness skeleton generation from enriched runtime hits
 - A multi-session live Ghidra bridge registry for several open targets at once
 - Bridge snapshots, mission finish/cleanup, and an autonomous multi-round mission driver
 - Mission workspaces with a persistent SQLite investigation graph, notes, and reports
@@ -291,6 +292,15 @@ ghidra-re diff workflowkit_full_dyld_extract WorkflowKit workflowkit_dyld_arm64e
 ```
 
 The current diff aligns by function name and disambiguates duplicate names by entry or structural metadata. It reports added, removed, modified, and unchanged functions plus a lightweight patch-relevance score. Instruction-mnemonic fingerprints and decompile comparisons are planned once headless Ghidra/JDK validation is available.
+
+To turn an enriched runtime hit into a starting harness:
+
+```bash
+./scripts/ghidra_generate_harness ~/ghidra-projects/exports/workflowkit_full_dyld_extract/WorkflowKit/lldb_trace_<timestamp>_enriched.json output=/tmp/workflowkit_harness.m
+ghidra-re generate-harness ~/ghidra-projects/exports/workflowkit_full_dyld_extract/WorkflowKit/lldb_trace_<timestamp>_enriched.json --language swift --output /tmp/workflowkit_harness.swift
+```
+
+The generated harness loads the target framework, records the observed function/symbol/address context, preserves argument-register pointers as comments/logs, and emits safe fuzzable placeholders. Calls are commented out until the placeholders are replaced with valid target-specific objects.
 
 ## Notes
 

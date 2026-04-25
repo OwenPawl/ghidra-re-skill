@@ -202,10 +202,12 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
   - Allocates the observed input types
   - Calls the target function with fuzzable stubs for arguments
   - Logs outputs to a known location
+- Status: ✅ Implemented and validated from enriched WorkflowKit trace. Generates compilable Objective-C and Swift harness skeletons, preserves observed register pointers, loads the target framework, and leaves the actual call commented until valid domain objects are supplied.
 
 ### 7.2 — XPC harness variant
 - For XPC-exposed surfaces: generate an `NSXPCConnection` client that calls the discovered interface methods
 - Uses XPC surface map from Phase 4
+- Status: ⬜ Pending; depends on Phase 4 XPC surface map
 
 ---
 
@@ -238,14 +240,14 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | `ghidra_diff` | ✅ Built and validated for structural function-inventory diffing; ⬜ mnemonic fingerprints/decompile comparison pending | 5.2 |
 | `ghidra_frida_trace` | **New** shell + JS | 6.1 |
 | `ghidra_frida_heap_scan` | **New** shell + JS | 6.2 |
-| `ghidra_generate_harness` | **New** shell + Python | 7.1 |
+| `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces; ⬜ XPC variant pending | 7.1 |
 
 ---
 
 ## Current status
 
-- **Active:** Phase 5 structural diffing milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
-- **Next:** Use Python-only artifacts for Phase 7 harness generation while Java-dependent Phase 3, Phase 4 static XPC, Phase 5 fingerprints, and Phase 2 decompile cache wait on a stable JDK
+- **Active:** Phase 7.1 harness generation milestone; Phase 2 decompile/auto-apply and Phase 0 live ObjC validation remain open
+- **Next:** Add XPC topology/harness support when Java headless validation is usable, or implement a Python-first live XPC trace path if LLDB artifacts are sufficient
 - **Blocked:** Headless Ghidra validation is currently blocked by local OpenJDK 21 crashing with SIGBUS even on `java -version`
 
 ---
@@ -260,3 +262,4 @@ Phases 4–7 are independent of 2–3 and can be interleaved based on user need.
 | 2026-04-12 | Frida deferred to Phase 6 | LLDB is working for BSR (get-task-allow present); Frida setup cost only justified when SIP blocks LLDB |
 | 2026-04-24 | Prefer function-inventory slide candidates when they map more hits than LLDB symbol candidates | Existing WorkflowKit artifacts have LLDB symbol and Ghidra inventory address bases that differ; scoring by mapped hit count produces the usable slide. |
 | 2026-04-24 | Implement Phase 5 diffing over existing function inventories before adding Java fingerprints | Local Java crashes block new headless Ghidra export passes, but existing JSON exports are sufficient for a useful structural diff milestone. |
+| 2026-04-24 | Generate safe harness skeletons rather than auto-invoking private APIs | Enriched traces preserve observed pointers, but valid object construction is target-specific; generated calls stay commented until the analyst supplies safe fixtures. |
