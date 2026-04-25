@@ -206,6 +206,7 @@ Run these wrappers from the skill directory:
 - `scripts/ghidra_xpc_trace <project_name> <program_name> attach_name=<process> [timeout=<s>] [max_hits=<n>] [dry_run=true]`  — trace common NSXPC setup calls through the LLDB trace backend
 - `scripts/ghidra_frida_trace <project_name> <program_name> symbols=<objc_methods> [process=<name>] [capture_returns=true] [dry_run=true]`  — generate or run a Frida ObjC method trace script
 - `scripts/ghidra_frida_heap_scan <class_name> [process=<name>] [dry_run=true]`  — generate or run a Frida ObjC heap enumeration script
+- `scripts/ghidra_generate_xpc_harness <project_name> <program_name> [service=<mach-service>] [protocol=<ProtocolName>] [output=<path>]`  — generate a safe Objective-C NSXPCConnection harness skeleton
 11b. For runtime analysis of binaries you can launch or attach to, use the LLDB integration tools:
    - `scripts/ghidra_lldb_symbols <binary_path> [<project_name> <program_name>]` — extract the full symbol table (ObjC methods, trampolines, data symbols) from a Mach-O binary in 0.7 s using LLDB's static module loading. No process needed. Outputs `lldb_symbols.json`.
    - `scripts/ghidra_build_isa_map <project_name> <program_name>` — extract concrete `_OBJC_CLASS_$_...` and `_OBJC_METACLASS_$_...` addresses from `symbols.json` and save `isa_map.json` beside the export bundle. Use this before isa-aware LLDB traces so captured `objc_isa` values can be resolved offline.

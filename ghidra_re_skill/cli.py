@@ -122,6 +122,34 @@ def generate_harness_cmd(
         _die(str(e))
 
 
+@app.command("generate-xpc-harness")
+def generate_xpc_harness_cmd(
+    project: str = typer.Argument(..., help="Ghidra project name."),
+    program: str = typer.Argument(..., help="Program name within the project."),
+    service: Optional[str] = typer.Option(None, "--service", help="Mach service name (default: first XPC surface candidate)."),
+    protocol: Optional[str] = typer.Option(None, "--protocol", help="ObjC protocol name for remoteObjectInterface."),
+    xpc_surface: Optional[str] = typer.Option(None, "--xpc-surface", help="Path to xpc_surface.json."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Destination Objective-C harness."),
+) -> None:
+    """Generate an Objective-C NSXPCConnection harness skeleton."""
+    from ghidra_re_skill.modules.xpc_harness import generate_xpc_harness
+
+    try:
+        result = generate_xpc_harness(
+            project=project,
+            program=program,
+            service=service,
+            protocol=protocol,
+            xpc_surface_path=xpc_surface,
+            output=output,
+        )
+        _print_json(result)
+        if result.get("ok"):
+            console.print(f"[green]Wrote[/green] {result['output']} ({result['service']})")
+    except Exception as e:
+        _die(str(e))
+
+
 # ---------------------------------------------------------------------------
 # bootstrap
 # ---------------------------------------------------------------------------

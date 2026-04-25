@@ -339,6 +339,15 @@ For Frida-based tracing on systems where Frida is installed:
 
 Both wrappers support `dry_run=true`, which generates Frida JavaScript without requiring the local Frida CLI. Generated events are emitted with `GHIDRA_FRIDA_*` prefixes for downstream parsing.
 
+To generate a safe XPC client harness from an XPC surface report:
+
+```bash
+./scripts/ghidra_generate_xpc_harness workflowkit_full_dyld_extract WorkflowKit service=com.apple.shortcuts.background-shortcut-runner protocol=WFMacHelperXPCProtocol output=/tmp/background_runner_xpc_harness.m
+ghidra-re generate-xpc-harness workflowkit_full_dyld_extract WorkflowKit --service com.apple.shortcuts.background-shortcut-runner --protocol WFMacHelperXPCProtocol --output /tmp/background_runner_xpc_harness.m
+```
+
+The generated Objective-C harness creates an `NSXPCConnection`, configures `remoteObjectInterface` when a protocol is supplied, and leaves remote method invocation as an explicit TODO.
+
 ## Notes
 
 - Real workflow friction and wishlist items now live in the shared GitHub-backed notes flow. Use `./scripts/ghidra_notes_add` for new items and `./scripts/ghidra_notes_open_shared` for the canonical public backlog.

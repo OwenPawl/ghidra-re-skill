@@ -214,7 +214,7 @@ scripts/ghidra_classify_small_functions <project_name> <program_name> \
 ### 7.2 — XPC harness variant
 - For XPC-exposed surfaces: generate an `NSXPCConnection` client that calls the discovered interface methods
 - Uses XPC surface map from Phase 4
-- Status: ⬜ Pending; depends on Phase 4 XPC surface map
+- Status: ✅ Implemented and validated for safe Objective-C `NSXPCConnection` skeleton generation from `xpc_surface.json`; generated harness compiles and leaves remote method invocation as an explicit TODO.
 
 ---
 
@@ -329,7 +329,8 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | Java-backed function fingerprint export | **New/modify export pass**; ⬜ blocked until Java/headless validation works | 5.1, 8.1 |
 | `ghidra_frida_trace` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.1, 8.2 |
 | `ghidra_frida_heap_scan` | ✅ Built and dry-run validated; ⬜ runtime validation blocked until Frida is installed | 6.2, 8.2 |
-| `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces; ⬜ XPC variant pending | 7.1 |
+| `ghidra_generate_harness` | ✅ Built and validated for Swift/Objective-C skeleton generation from enriched traces | 7.1 |
+| `ghidra_generate_xpc_harness` | ✅ Built and validated for Objective-C NSXPCConnection skeleton generation from XPC surface reports | 7.2 |
 | Bridge regression fixtures | **New** trace/export fixtures for live/headless consistency checks | 8.4 |
 | Next development roadmap | **New** living roadmap document; must be created as the continuation of this roadmap | 8.5 |
 
@@ -359,3 +360,4 @@ Phase 8 is the final gate for this roadmap. It must happen before the next roadm
 | 2026-04-24 | Add a Python-first XPC surface pass before the planned Java extractor | Existing ObjC/string/symbol exports already expose useful XPC classes, services, protocols, and listener methods while Java headless validation remains blocked. |
 | 2026-04-24 | Require full program-token matches for inferred XPC service ownership | Partial token matches over-link generic Shortcuts services; full-token matching correctly maps `com.apple.shortcuts.background-shortcut-runner` to BackgroundShortcutRunner without assigning unrelated services. |
 | 2026-04-24 | Land Frida as generated scripts with dry-run validation first | Frida is not installed locally, so the useful milestone is syntax-checked script generation plus wrappers that run when the dependency is present. |
+| 2026-04-24 | Keep generated XPC harnesses non-invasive by default | XPC services may require entitlements and valid protocol objects; generated clients configure the connection but leave remote calls as analyst-controlled TODOs. |
